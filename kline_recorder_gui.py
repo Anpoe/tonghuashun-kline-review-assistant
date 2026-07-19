@@ -63,6 +63,16 @@ INSTANCE_MUTEX_NAME = "Local\\KlineReviewAssistant-4D4964F4-33F8-49AB-8FF1-C5EE8
 INSTANCE_MUTEX_HANDLE: int | None = None
 
 
+def blend_color(foreground: str, background: str, amount: float) -> str:
+    foreground_rgb = tuple(int(foreground[index : index + 2], 16) for index in (1, 3, 5))
+    background_rgb = tuple(int(background[index : index + 2], 16) for index in (1, 3, 5))
+    blended = tuple(
+        round(background_value + (foreground_value - background_value) * amount)
+        for foreground_value, background_value in zip(foreground_rgb, background_rgb)
+    )
+    return "#" + "".join(f"{value:02x}" for value in blended)
+
+
 def acquire_single_instance() -> bool:
     global INSTANCE_MUTEX_HANDLE
     create_mutex = ctypes.windll.kernel32.CreateMutexW
@@ -100,10 +110,18 @@ class RecorderPanel:
         self.tag_presets = normalize_tags(self.config.get("tags", {}).get("presets", []))
         self.selected_tag_names: set[str] = set()
         self.tag_window: tk.Toplevel | None = None
-        self.tag_listbox: tk.Listbox | None = None
+        self.tag_options_frame: tk.Frame | None = None
+        self.tag_canvas: tk.Canvas | None = None
+        self.tag_list_frame: tk.Frame | None = None
+        self.tag_summary_label: tk.Label | None = None
+        self.tag_editor_frame: tk.Frame | None = None
+        self.tag_footer: tk.Frame | None = None
+        self.tag_editor_toggle: tk.Button | None = None
+        self.tag_editor_expanded = False
         self.tag_name_entry: tk.Entry | None = None
         self.tag_color = TAG_COLORS[5]
         self.tag_color_swatch: tk.Button | None = None
+        self.tag_color_buttons: list[tuple[str, tk.Button]] = []
         self.dashboard = DashboardServer(self.obsidian_dir)
 
         self.root = tk.Tk()
@@ -236,7 +254,7 @@ class RecorderPanel:
             activebackground=COLORS["surface_alt"],
             activeforeground="#ffffff",
             bd=0,
-            padx=4,
+            padx=2,
             pady=6,
             font=("Microsoft YaHei UI", 8, "bold"),
             cursor="hand2",
@@ -250,21 +268,21 @@ class RecorderPanel:
             activebackground=COLORS["surface_alt"],
             activeforeground="#ffffff",
             bd=0,
-            padx=4,
+            padx=2,
             pady=6,
             font=("Microsoft YaHei UI", 8),
             cursor="hand2",
         ).pack(side="left")
         self.tag_button = tk.Button(
             footer,
-            text="标签",
+            text="标签⌄",
             command=self.open_tags,
             bg=COLORS["surface"],
             fg=COLORS["muted"],
             activebackground=COLORS["surface_alt"],
             activeforeground="#ffffff",
             bd=0,
-            padx=4,
+            padx=2,
             pady=6,
             font=("Microsoft YaHei UI", 8),
             cursor="hand2",
@@ -279,7 +297,7 @@ class RecorderPanel:
             activebackground=COLORS["surface_alt"],
             activeforeground="#ffffff",
             bd=0,
-            padx=4,
+            padx=2,
             pady=6,
             font=("Microsoft YaHei UI", 8),
             cursor="hand2",
@@ -344,99 +362,188 @@ class RecorderPanel:
         with self.tag_lock:
             self.selected_tag_names.clear()
         self._update_tag_button()
-        self._refresh_tag_listbox()
+        self._refresh_tag_options()
 
     def _update_tag_button(self) -> None:
-        count = len(self.selected_tag_names)
+        with self.tag_lock:
+            count = len(self.selected_tag_names)
+        expanded = False
+        if self.tag_window is not None:
+            try:
+                expanded = bool(self.tag_window.winfo_exists())
+            except tk.TclError:
+                pass
+        suffix = "⌃" if expanded else "⌄"
+        count_text = str(count) if count < 10 else "+"
         self.tag_button.configure(
-            text=f"标签 {count}" if count else "标签",
+            text=f"标签{count_text}{suffix}" if count else f"标签{suffix}",
             fg=COLORS["accent"] if count else COLORS["muted"],
         )
 
     def open_tags(self) -> None:
-        if self.tag_window is not None and self.tag_window.winfo_exists():
-            self.tag_window.lift()
-            self.tag_window.focus_force()
-            return
+        if self.tag_window is not None:
+            try:
+                if self.tag_window.winfo_exists():
+                    self._close_tag_panel()
+                    return
+            except tk.TclError:
+                pass
 
         window = tk.Toplevel(self.root)
         self.tag_window = window
+        self._update_tag_button()
         window.title("本局标签")
-        window.geometry("420x540")
-        window.minsize(400, 430)
-        window.resizable(True, True)
-        window.configure(bg=COLORS["background"])
+        window.geometry("360x360")
+        window.resizable(False, False)
+        window.overrideredirect(True)
+        window.configure(bg=COLORS["border"])
         window.transient(self.root)
+        window.attributes("-topmost", self.panel_topmost)
 
-        header = tk.Frame(window, bg=COLORS["surface"])
+        shell = tk.Frame(window, bg=COLORS["background"])
+        shell.pack(fill="both", expand=True, padx=1, pady=1)
+        header = tk.Frame(shell, bg=COLORS["surface"], height=86)
         header.pack(fill="x")
+        header.pack_propagate(False)
+        mark = tk.Frame(header, bg=COLORS["accent"], width=4, height=24)
+        mark.pack(side="left", padx=(14, 10))
+        mark.pack_propagate(False)
+        title_group = tk.Frame(header, bg=COLORS["surface"])
+        title_group.pack(side="left", fill="x", expand=True, pady=10)
         tk.Label(
-            header,
+            title_group,
             text="本局标签",
             bg=COLORS["surface"],
             fg=COLORS["text"],
-            font=("Microsoft YaHei UI", 12, "bold"),
-        ).pack(anchor="w", padx=18, pady=(14, 2))
-        tk.Label(
-            header,
-            text="选中的标签会写入当前或下一局，保存后自动清空",
+            font=("Microsoft YaHei UI", 11, "bold"),
+        ).pack(anchor="w")
+        self.tag_summary_label = tk.Label(
+            title_group,
+            text="未选择标签",
             bg=COLORS["surface"],
             fg=COLORS["muted"],
             font=("Microsoft YaHei UI", 8),
-            justify="left",
-            wraplength=330,
-        ).pack(anchor="w", padx=18, pady=(0, 13))
+        )
+        self.tag_summary_label.pack(anchor="w", pady=(2, 0))
+        tk.Button(
+            header,
+            text="×",
+            command=self._close_tag_panel,
+            bg=COLORS["surface"],
+            fg=COLORS["muted"],
+            activebackground="#3a2023",
+            activeforeground="#ffffff",
+            bd=0,
+            width=3,
+            font=("Segoe UI", 13),
+            cursor="hand2",
+        ).pack(side="right", fill="y")
 
-        list_frame = tk.Frame(window, bg=COLORS["background"])
-        list_frame.pack(fill="both", expand=True, padx=18, pady=(14, 8))
-        scrollbar = tk.Scrollbar(list_frame, orient="vertical")
-        scrollbar.pack(side="right", fill="y")
-        self.tag_listbox = tk.Listbox(
+        section_header = tk.Frame(shell, bg=COLORS["background"])
+        section_header.pack(fill="x", padx=14, pady=(12, 7))
+        tk.Label(
+            section_header,
+            text="选择标签",
+            bg=COLORS["background"],
+            fg=COLORS["text"],
+            font=("Microsoft YaHei UI", 8, "bold"),
+        ).pack(side="left")
+
+        list_frame = tk.Frame(shell, bg=COLORS["background"])
+        self.tag_list_frame = list_frame
+        list_frame.pack(fill="both", expand=True, padx=14, pady=(0, 8))
+        scroll_indicator = tk.Canvas(
             list_frame,
-            height=6,
-            selectmode=tk.MULTIPLE,
-            exportselection=False,
-            activestyle="none",
+            width=6,
+            bg=COLORS["background"],
+            highlightthickness=0,
+        )
+        scroll_indicator.pack(side="right", fill="y", padx=(4, 0))
+        scroll_state = [0.0, 1.0]
+
+        def draw_scroll_indicator() -> None:
+            scroll_indicator.delete("all")
+            first, last = scroll_state
+            if last - first >= 0.999:
+                return
+            height = max(1, scroll_indicator.winfo_height())
+            top = round(first * height)
+            bottom = max(top + 20, round(last * height))
+            scroll_indicator.create_rectangle(
+                1,
+                top,
+                5,
+                min(height, bottom),
+                fill=COLORS["muted"],
+                outline="",
+            )
+
+        def update_scroll_indicator(first: str, last: str) -> None:
+            scroll_state[:] = [float(first), float(last)]
+            draw_scroll_indicator()
+
+        scroll_indicator.bind("<Configure>", lambda _event: draw_scroll_indicator())
+        self.tag_canvas = tk.Canvas(
+            list_frame,
+            bg=COLORS["background"],
+            width=1,
+            height=1,
+            highlightthickness=0,
+            yscrollcommand=update_scroll_indicator,
+        )
+        self.tag_canvas.pack(side="left", fill="both", expand=True)
+        self.tag_options_frame = tk.Frame(self.tag_canvas, bg=COLORS["background"])
+        canvas_window = self.tag_canvas.create_window((0, 0), window=self.tag_options_frame, anchor="nw")
+        self.tag_options_frame.bind(
+            "<Configure>",
+            lambda _event: self.tag_canvas.configure(scrollregion=self.tag_canvas.bbox("all")),
+        )
+        self.tag_canvas.bind(
+            "<Configure>",
+            lambda event: self.tag_canvas.itemconfigure(canvas_window, width=event.width),
+        )
+        window.bind(
+            "<MouseWheel>",
+            lambda event: self.tag_canvas.yview_scroll(int(-event.delta / 120), "units")
+            if self.tag_canvas is not None
+            else None,
+        )
+        self._refresh_tag_options()
+
+        self.tag_editor_frame = tk.Frame(shell, bg=COLORS["surface_alt"])
+        tk.Label(
+            self.tag_editor_frame,
+            text="新建标签",
             bg=COLORS["surface_alt"],
             fg=COLORS["text"],
-            selectbackground="#384154",
-            selectforeground="#ffffff",
-            highlightthickness=1,
-            highlightbackground=COLORS["border"],
-            relief="flat",
-            font=("Microsoft YaHei UI", 9),
-            yscrollcommand=scrollbar.set,
-        )
-        self.tag_listbox.pack(side="left", fill="both", expand=True)
-        scrollbar.configure(command=self.tag_listbox.yview)
-        self.tag_listbox.bind("<<ListboxSelect>>", self._on_tag_selection)
-        self._refresh_tag_listbox()
-
-        editor = tk.Frame(window, bg=COLORS["background"])
-        editor.pack(fill="x", padx=18, pady=(4, 0))
+            font=("Microsoft YaHei UI", 8, "bold"),
+        ).pack(anchor="w", padx=12, pady=(10, 7))
+        editor = tk.Frame(self.tag_editor_frame, bg=COLORS["surface_alt"])
+        editor.pack(fill="x", padx=12)
         self.tag_name_entry = tk.Entry(
             editor,
-            bg=COLORS["surface_alt"],
+            bg=COLORS["background"],
             fg=COLORS["text"],
             insertbackground=COLORS["text"],
             relief="flat",
             font=("Microsoft YaHei UI", 9),
+            width=8,
         )
-        self.tag_name_entry.pack(side="left", fill="x", expand=True, ipady=7)
         self.tag_name_entry.insert(0, "新标签名称")
         self.tag_name_entry.bind("<FocusIn>", self._clear_tag_placeholder)
         self.tag_color_swatch = tk.Button(
             editor,
-            text="",
-            width=3,
+            text="⋯",
+            width=2,
             bg=self.tag_color,
             activebackground=self.tag_color,
+            fg="#ffffff",
+            activeforeground="#ffffff",
             bd=0,
             command=self._choose_tag_color,
             cursor="hand2",
         )
-        self.tag_color_swatch.pack(side="left", fill="y", padx=(8, 0))
-        tk.Button(
+        add_button = tk.Button(
             editor,
             text="添加",
             command=self._add_tag_preset,
@@ -448,57 +555,140 @@ class RecorderPanel:
             padx=12,
             font=("Microsoft YaHei UI", 8, "bold"),
             cursor="hand2",
-        ).pack(side="left", fill="y", padx=(8, 0))
+        )
+        add_button.pack(side="right", fill="y")
+        self.tag_color_swatch.pack(side="right", fill="y", padx=(8, 8))
+        self.tag_name_entry.pack(side="left", fill="x", expand=True, ipady=7)
 
-        palette = tk.Frame(window, bg=COLORS["background"])
-        palette.pack(fill="x", padx=18, pady=10)
+        palette = tk.Frame(self.tag_editor_frame, bg=COLORS["surface_alt"])
+        palette.pack(fill="x", padx=9, pady=(8, 10))
+        self.tag_color_buttons = []
         for column in range(4):
             palette.columnconfigure(column, weight=1)
         for index, color in enumerate(TAG_COLORS):
-            tk.Button(
+            color_button = tk.Button(
                 palette,
                 text="",
                 width=2,
                 height=1,
                 bg=color,
                 activebackground=color,
-                bd=0,
+                bd=2,
+                relief="solid",
+                highlightthickness=1,
+                highlightbackground=COLORS["surface_alt"],
                 command=lambda value=color: self._set_tag_color(value),
                 cursor="hand2",
-            ).grid(row=index // 4, column=index % 4, sticky="ew", padx=3, pady=3, ipady=3)
+            )
+            color_button.grid(row=index // 4, column=index % 4, sticky="ew", padx=3, pady=3, ipady=3)
+            self.tag_color_buttons.append((color, color_button))
 
-        actions = tk.Frame(window, bg=COLORS["background"])
-        actions.pack(fill="x", padx=18, pady=(2, 14))
-        tk.Button(
-            actions,
-            text="删除选中预设",
-            command=self._delete_tag_presets,
-            bg=COLORS["background"],
-            fg=COLORS["error"],
+        self.tag_footer = tk.Frame(shell, bg=COLORS["surface"])
+        self.tag_footer.pack(fill="x", side="bottom", before=list_frame)
+        self.tag_editor_toggle = tk.Button(
+            self.tag_footer,
+            text="＋ 新建标签",
+            command=self._toggle_tag_editor,
+            bg=COLORS["surface"],
+            fg=COLORS["accent"],
             activebackground=COLORS["surface_alt"],
-            activeforeground="#ff8b8b",
+            activeforeground="#ffad73",
             bd=0,
-            font=("Microsoft YaHei UI", 8),
+            padx=12,
+            pady=9,
+            font=("Microsoft YaHei UI", 8, "bold"),
             cursor="hand2",
-        ).pack(side="left")
+        )
+        self.tag_editor_toggle.pack(side="left")
         tk.Button(
-            actions,
-            text="完成",
-            command=window.destroy,
-            bg=COLORS["surface_alt"],
-            fg=COLORS["text"],
-            activebackground="#343946",
+            self.tag_footer,
+            text="收起",
+            command=self._close_tag_panel,
+            bg=COLORS["surface"],
+            fg=COLORS["muted"],
+            activebackground=COLORS["surface_alt"],
             activeforeground="#ffffff",
             bd=0,
-            padx=16,
-            pady=6,
-            font=("Microsoft YaHei UI", 8, "bold"),
+            padx=14,
+            pady=9,
+            font=("Microsoft YaHei UI", 8),
             cursor="hand2",
         ).pack(side="right")
 
-        window.protocol("WM_DELETE_WINDOW", window.destroy)
+        self._set_tag_color(self.tag_color)
+        self.tag_editor_expanded = False
+        window.bind("<Escape>", lambda _event: self._close_tag_panel())
         window.lift()
+        window.update_idletasks()
+        self._position_tag_window()
         window.focus_force()
+
+    def _close_tag_panel(self) -> None:
+        window = self.tag_window
+        self.tag_window = None
+        self.tag_options_frame = None
+        self.tag_canvas = None
+        self.tag_list_frame = None
+        self.tag_summary_label = None
+        self.tag_editor_frame = None
+        self.tag_footer = None
+        self.tag_editor_toggle = None
+        self.tag_name_entry = None
+        self.tag_color_swatch = None
+        self.tag_color_buttons = []
+        self.tag_editor_expanded = False
+        if window is not None:
+            try:
+                window.destroy()
+            except tk.TclError:
+                pass
+        self._update_tag_button()
+
+    def _position_tag_window(self) -> None:
+        window = self.tag_window
+        if window is None:
+            return
+        try:
+            if not window.winfo_exists():
+                return
+            width = 360
+            height = 580 if self.tag_editor_expanded else 360
+            self.root.update_idletasks()
+            monitor = win32api.MonitorFromWindow(self.root.winfo_id(), win32con.MONITOR_DEFAULTTONEAREST)
+            work_left, work_top, work_right, work_bottom = win32api.GetMonitorInfo(monitor)["Work"]
+            root_x = self.root.winfo_rootx()
+            root_y = self.root.winfo_rooty()
+            right_x = root_x + self.root.winfo_width() + 8
+            left_x = root_x - width - 8
+            x = right_x if right_x + width <= work_right else max(work_left, left_x)
+            y = min(max(root_y, work_top), max(work_top, work_bottom - height))
+            window.geometry(f"{width}x{height}+{x}+{y}")
+            window.attributes("-topmost", self.panel_topmost)
+        except (tk.TclError, win32gui.error):
+            pass
+
+    def _toggle_tag_editor(self) -> None:
+        if (
+            self.tag_editor_frame is None
+            or self.tag_footer is None
+            or self.tag_editor_toggle is None
+            or self.tag_list_frame is None
+        ):
+            return
+        self.tag_editor_expanded = not self.tag_editor_expanded
+        if self.tag_editor_expanded:
+            self.tag_editor_frame.pack(
+                fill="x",
+                side="bottom",
+                padx=14,
+                pady=(0, 10),
+                before=self.tag_list_frame,
+            )
+            self.tag_editor_toggle.configure(text="− 收起新建")
+        else:
+            self.tag_editor_frame.pack_forget()
+            self.tag_editor_toggle.configure(text="＋ 新建标签")
+        self._position_tag_window()
 
     def _clear_tag_placeholder(self, _event: object) -> None:
         if self.tag_name_entry is not None and self.tag_name_entry.get() == "新标签名称":
@@ -508,34 +698,108 @@ class RecorderPanel:
         self.tag_color = color
         if self.tag_color_swatch is not None:
             self.tag_color_swatch.configure(bg=color, activebackground=color)
+        for value, button in self.tag_color_buttons:
+            button.configure(
+                text="✓" if value == color else "",
+                fg="#ffffff",
+                activeforeground="#ffffff",
+                highlightbackground="#ffffff" if value == color else COLORS["surface_alt"],
+                highlightcolor="#ffffff" if value == color else COLORS["surface_alt"],
+            )
 
     def _choose_tag_color(self) -> None:
         _rgb, color = colorchooser.askcolor(self.tag_color, title="选择标签颜色", parent=self.tag_window)
         if color:
             self._set_tag_color(color.lower())
 
-    def _on_tag_selection(self, _event: object | None = None) -> None:
-        if self.tag_listbox is None:
-            return
-        selected = {self.tag_presets[index]["name"] for index in self.tag_listbox.curselection()}
+    def _toggle_tag(self, name: str) -> None:
         with self.tag_lock:
-            self.selected_tag_names = selected
+            if name in self.selected_tag_names:
+                self.selected_tag_names.remove(name)
+            else:
+                self.selected_tag_names.add(name)
         self._update_tag_button()
+        self._refresh_tag_options()
 
-    def _refresh_tag_listbox(self) -> None:
-        if self.tag_listbox is None:
+    def _refresh_tag_options(self) -> None:
+        frame = self.tag_options_frame
+        if frame is None:
             return
         try:
-            if not self.tag_listbox.winfo_exists():
+            if not frame.winfo_exists():
                 return
         except tk.TclError:
             return
-        self.tag_listbox.delete(0, "end")
-        for index, tag in enumerate(self.tag_presets):
-            self.tag_listbox.insert("end", tag["name"])
-            self.tag_listbox.itemconfigure(index, fg=tag["color"])
-            if tag["name"] in self.selected_tag_names:
-                self.tag_listbox.selection_set(index)
+
+        for child in frame.winfo_children():
+            child.destroy()
+        with self.tag_lock:
+            presets = [dict(tag) for tag in self.tag_presets]
+            selected_names = set(self.selected_tag_names)
+
+        if self.tag_summary_label is not None:
+            count = len(selected_names)
+            self.tag_summary_label.configure(
+                text=f"已选择 {count} 个 · 保存后自动清空" if count else "未选择标签",
+                fg=COLORS["accent"] if count else COLORS["muted"],
+            )
+
+        if not presets:
+            tk.Label(
+                frame,
+                text="暂无标签",
+                bg=COLORS["background"],
+                fg=COLORS["muted"],
+                font=("Microsoft YaHei UI", 9),
+            ).pack(fill="x", pady=24)
+            return
+
+        for tag in presets:
+            name = tag["name"]
+            color = tag["color"]
+            selected = name in selected_names
+            row_bg = blend_color(color, COLORS["surface_alt"], 0.20) if selected else COLORS["surface_alt"]
+            border = tk.Frame(frame, bg=color if selected else COLORS["border"], padx=1, pady=1)
+            border.pack(fill="x", pady=(0, 6))
+            row = tk.Frame(border, bg=row_bg)
+            row.pack(fill="x")
+            tk.Button(
+                row,
+                text="×",
+                command=lambda value=name: self._delete_tag_preset(value),
+                bg=row_bg,
+                fg=COLORS["muted"],
+                activebackground="#3a2023",
+                activeforeground="#ffffff",
+                bd=0,
+                width=3,
+                font=("Segoe UI", 11),
+                cursor="hand2",
+            ).pack(side="right", fill="y")
+            tk.Button(
+                row,
+                text=f"✓  {name}" if selected else f"●  {name}",
+                command=lambda value=name: self._toggle_tag(value),
+                anchor="w",
+                justify="left",
+                wraplength=230,
+                bg=row_bg,
+                fg="#ffffff" if selected else color,
+                activebackground=blend_color(color, COLORS["surface_alt"], 0.28),
+                activeforeground="#ffffff",
+                bd=0,
+                padx=12,
+                pady=8,
+                font=("Microsoft YaHei UI", 9, "bold" if selected else "normal"),
+                cursor="hand2",
+            ).pack(side="left", fill="both", expand=True)
+
+        if self.tag_canvas is not None:
+            self.tag_canvas.after_idle(
+                lambda: self.tag_canvas.configure(scrollregion=self.tag_canvas.bbox("all"))
+                if self.tag_canvas is not None
+                else None
+            )
 
     def _add_tag_preset(self) -> None:
         if self.tag_name_entry is None:
@@ -559,24 +823,21 @@ class RecorderPanel:
             self.selected_tag_names.add(tag["name"])
         self._persist_tag_presets()
         self.tag_name_entry.delete(0, "end")
-        self._refresh_tag_listbox()
+        self._refresh_tag_options()
         self._update_tag_button()
 
-    def _delete_tag_presets(self) -> None:
-        if self.tag_listbox is None:
-            return
-        indices = set(self.tag_listbox.curselection())
-        if not indices:
-            return
-        removed = {self.tag_presets[index]["name"] for index in indices}
-        names = "、".join(sorted(removed))
-        if not messagebox.askyesno("删除标签预设", f"确定删除“{names}”吗？\n已保存记录中的标签不会受影响。", parent=self.tag_window):
+    def _delete_tag_preset(self, name: str) -> None:
+        if not messagebox.askyesno(
+            "删除标签预设",
+            f"确定删除“{name}”吗？\n已保存记录中的标签不会受影响。",
+            parent=self.tag_window,
+        ):
             return
         with self.tag_lock:
-            self.tag_presets = [tag for index, tag in enumerate(self.tag_presets) if index not in indices]
-            self.selected_tag_names.difference_update(removed)
+            self.tag_presets = [tag for tag in self.tag_presets if tag["name"] != name]
+            self.selected_tag_names.discard(name)
         self._persist_tag_presets()
-        self._refresh_tag_listbox()
+        self._refresh_tag_options()
         self._update_tag_button()
 
     def _persist_tag_presets(self) -> None:
@@ -646,7 +907,10 @@ class RecorderPanel:
                 foreground = win32gui.GetForegroundWindow()
                 _target_thread, target_pid = win32process.GetWindowThreadProcessId(hwnd)
                 _foreground_thread, foreground_pid = win32process.GetWindowThreadProcessId(foreground)
-                same_app_active = foreground in (hwnd, panel_hwnd) or foreground_pid == target_pid
+                same_app_active = (
+                    foreground in (hwnd, panel_hwnd)
+                    or foreground_pid in (target_pid, os.getpid())
+                )
                 if not same_app_active:
                     for app_hwnd, title, _class_name, _app_rect in list_visible_windows():
                         if "同花顺远航版" not in title:
@@ -674,6 +938,8 @@ class RecorderPanel:
                 if self.panel_topmost:
                     self.panel_topmost = False
                     self.root.attributes("-topmost", False)
+            if self.tag_window is not None:
+                self._position_tag_window()
         except Exception:
             pass
         self.root.after(120, self._follow_training_window)
@@ -688,6 +954,8 @@ class RecorderPanel:
             self.body.pack(fill="both", expand=True)
             self.collapse_button.configure(text="−")
             self.root.geometry(f"{PANEL_WIDTH}x{PANEL_HEIGHT}")
+        if self.tag_window is not None:
+            self._position_tag_window()
 
     def open_output_dir(self) -> None:
         try:
