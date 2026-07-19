@@ -136,6 +136,11 @@ dialog::backdrop { background: rgba(5, 7, 10, .76); }
 .dialog-shell header h2 { margin: 4px 0; font-size: 20px; }
 .dialog-shell header p { margin: 0; color: var(--muted); font-size: 11px; }
 .stock-code { color: var(--accent); font: 700 10px/1 "Segoe UI"; }
+.dialog-shell > header > div:first-child { min-width: 0; }
+.dialog-actions { display: flex; flex: none; align-items: center; gap: 8px; }
+.danger-button { height: 34px; padding: 0 12px; border: 1px solid rgba(239, 91, 97, .5); border-radius: 4px; background: transparent; color: #ff858a; font-size: 11px; font-weight: 700; white-space: nowrap; cursor: pointer; }
+.danger-button:hover { border-color: var(--red); background: rgba(239, 91, 97, .1); color: #ffadb0; }
+.danger-button:disabled { opacity: .55; cursor: wait; }
 .icon-button { width: 34px; height: 34px; border: 0; border-radius: 4px; background: var(--surface-2); color: var(--muted); font-size: 22px; cursor: pointer; }
 .icon-button:hover { color: var(--text); }
 .detail-metrics { display: grid; grid-template-columns: 1fr 2fr; border-bottom: 1px solid var(--border); }

@@ -21,6 +21,8 @@ IMAGE_PATTERN = re.compile(r"!\[\[([^\]]+)\]\]")
 PROFIT_PATTERN = re.compile(r"([+-]?\d+(?:\.\d+)?)\s*(?:%|pct)", re.IGNORECASE)
 CODE_PATTERN = re.compile(r"(?:^|\s)(\d{6})$")
 DATE_RANGE_PATTERN = re.compile(r"(\d{8})\s*[-—–_]\s*(\d{8})")
+RECORD_ID_PATTERN = re.compile(r"[0-9a-f]{16}")
+DELETABLE_IMAGE_SUFFIXES = {".bmp", ".jpeg", ".jpg", ".png", ".webp"}
 
 
 def resource_path(*parts: str) -> Path:
@@ -140,14 +142,12 @@ class ReviewRepository:
         self._payload: dict[str, object] = self._build_payload([])
 
     def snapshot(self) -> dict[str, object]:
-        self.root.mkdir(parents=True, exist_ok=True)
-        notes = sorted(self.root.glob("*.md"))
-        fingerprint = tuple(
-            (note.name, note.stat().st_mtime_ns, note.stat().st_size)
-            for note in notes
-            if note.is_file()
-        )
         with self._lock:
+            self.root.mkdir(parents=True, exist_ok=True)
+            notes = sorted(note for note in self.root.glob("*.md") if note.is_file())
+            fingerprint = tuple(
+                (note.name, note.stat().st_mtime_ns, note.stat().st_size) for note in notes
+            )
             if fingerprint != self._fingerprint:
                 records = [record for note in notes if (record := parse_review_note(note, self.root))]
                 records.sort(key=lambda item: item.recorded_at, reverse=True)
@@ -160,6 +160,69 @@ class ReviewRepository:
         if candidate is None or not candidate.is_file():
             return None
         return candidate
+
+    def delete_record(self, record_id: str) -> dict[str, object]:
+        if RECORD_ID_PATTERN.fullmatch(record_id) is None:
+            raise KeyError(record_id)
+
+        with self._lock:
+            notes = sorted(note for note in self.root.glob("*.md") if note.is_file())
+            parsed = [(note, parse_review_note(note, self.root)) for note in notes]
+            target = next(
+                ((note, record) for note, record in parsed if record and record.record_id == record_id),
+                None,
+            )
+            if target is None:
+                raise KeyError(record_id)
+
+            target_note, target_record = target
+            target_images = self._note_images(target_note)
+            shared_images: set[Path] = set()
+            for note, _record in parsed:
+                if note != target_note:
+                    shared_images.update(self._note_images(note))
+
+            target_note.unlink()
+            deleted_images: list[str] = []
+            retained_images: list[str] = []
+            for image_path in target_images - shared_images:
+                if image_path.suffix.lower() not in DELETABLE_IMAGE_SUFFIXES or not image_path.is_file():
+                    continue
+                relative_image = image_path.relative_to(self.root).as_posix()
+                try:
+                    image_path.unlink()
+                    deleted_images.append(relative_image)
+                except OSError:
+                    retained_images.append(relative_image)
+
+            remaining = [record for note, record in parsed if note != target_note and record is not None]
+            remaining.sort(key=lambda item: item.recorded_at, reverse=True)
+            remaining_notes = sorted(note for note in self.root.glob("*.md") if note.is_file())
+            self._fingerprint = tuple(
+                (note.name, note.stat().st_mtime_ns, note.stat().st_size) for note in remaining_notes
+            )
+            self._payload = self._build_payload(remaining)
+
+            return {
+                "deleted": True,
+                "id": target_record.record_id,
+                "noteName": target_record.note_name,
+                "imagesDeleted": deleted_images,
+                "imagesRetained": retained_images,
+            }
+
+    def _note_images(self, note_path: Path) -> set[Path]:
+        try:
+            text = note_path.read_text(encoding="utf-8-sig")
+        except (OSError, UnicodeError):
+            return set()
+
+        images: set[Path] = set()
+        for value in IMAGE_PATTERN.findall(text):
+            candidate = _safe_relative_path(self.root, value.strip())
+            if candidate is not None:
+                images.add(candidate)
+        return images
 
     @staticmethod
     def _build_payload(records: list[ReviewRecord]) -> dict[str, object]:
@@ -248,9 +311,29 @@ class DashboardServer:
                     return
                 self._send_file(static_path, cache=True)
 
-            def _send_json(self, payload: dict[str, object]) -> None:
+            def do_DELETE(self) -> None:  # noqa: N802
+                parsed = urlparse(self.path)
+                match = re.fullmatch(r"/api/records/([0-9a-f]{16})", parsed.path)
+                if match is None:
+                    self._send_json({"error": "记录不存在"}, status=HTTPStatus.NOT_FOUND)
+                    return
+                try:
+                    result = repository.delete_record(match.group(1))
+                except KeyError:
+                    self._send_json({"error": "记录不存在或已经删除"}, status=HTTPStatus.NOT_FOUND)
+                    return
+                except OSError:
+                    self._send_json({"error": "删除文件失败，请检查文件是否被占用"}, status=HTTPStatus.CONFLICT)
+                    return
+                self._send_json(result)
+
+            def _send_json(
+                self,
+                payload: dict[str, object],
+                status: HTTPStatus = HTTPStatus.OK,
+            ) -> None:
                 data = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-                self.send_response(HTTPStatus.OK)
+                self.send_response(status)
                 self.send_header("Content-Type", "application/json; charset=utf-8")
                 self.send_header("Content-Length", str(len(data)))
                 self.send_header("Cache-Control", "no-store")
@@ -267,7 +350,7 @@ class DashboardServer:
                 self.send_response(HTTPStatus.OK)
                 self.send_header("Content-Type", content_type)
                 self.send_header("Content-Length", str(len(data)))
-                self.send_header("Cache-Control", "public, max-age=3600" if cache else "no-store")
+                self.send_header("Cache-Control", "no-cache" if cache else "no-store")
                 self.send_header("X-Content-Type-Options", "nosniff")
                 self.end_headers()
                 self.wfile.write(data)

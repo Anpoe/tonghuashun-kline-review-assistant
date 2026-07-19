@@ -4,7 +4,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 
 from kline_dashboard import DashboardServer, ReviewRepository, parse_review_note
 
@@ -19,7 +19,13 @@ class DashboardTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.temp_dir.cleanup()
 
-    def write_note(self, name: str, stock: str, profit: str) -> Path:
+    def write_note(
+        self,
+        name: str,
+        stock: str,
+        profit: str,
+        image: str = "images/chart.png",
+    ) -> Path:
         note = self.root / name
         note.write_text(
             f"# {stock} {profit}\n\n"
@@ -27,7 +33,7 @@ class DashboardTests(unittest.TestCase):
             "- 训练区间：20251212 - 20260403\n"
             f"- 本局收益：{profit}\n"
             "- 记录时间：2026-06-20 14:03:14\n\n"
-            "![[images/chart.png]]\n",
+            f"![[{image}]]\n",
             encoding="utf-8",
         )
         return note
@@ -60,7 +66,7 @@ class DashboardTests(unittest.TestCase):
         self.assertIsNone(repository.resolve_media("../outside.png"))
 
     def test_local_http_api(self) -> None:
-        self.write_note("record.md", "浙农股份", "2.11%")
+        note = self.write_note("record.md", "浙农股份", "2.11%")
         server = DashboardServer(self.root)
         url = server.start(open_browser=False)
         try:
@@ -70,8 +76,33 @@ class DashboardTests(unittest.TestCase):
                 index = response.read()
             self.assertEqual(payload["summary"]["total"], 1)
             self.assertIn(b"<!doctype html>", index)
+
+            record_id = payload["records"][0]["id"]
+            request = Request(url + f"api/records/{record_id}", method="DELETE")
+            with urlopen(request, timeout=3) as response:
+                deleted = json.load(response)
+            self.assertTrue(deleted["deleted"])
+            self.assertFalse(note.exists())
+            self.assertFalse((self.root / "images" / "chart.png").exists())
+            with urlopen(url + "api/dashboard", timeout=3) as response:
+                refreshed = json.load(response)
+            self.assertEqual(refreshed["summary"]["total"], 0)
         finally:
             server.stop()
+
+    def test_delete_preserves_shared_images(self) -> None:
+        first = self.write_note("first.md", "浙农股份", "2.00%")
+        self.write_note("second.md", "双汇发展", "-1.00%")
+        repository = ReviewRepository(self.root)
+        record = parse_review_note(first, self.root)
+        self.assertIsNotNone(record)
+
+        result = repository.delete_record(record.record_id)
+
+        self.assertTrue(result["deleted"])
+        self.assertFalse(first.exists())
+        self.assertTrue((self.root / "images" / "chart.png").exists())
+        self.assertEqual(repository.snapshot()["summary"]["total"], 1)
 
 
 if __name__ == "__main__":

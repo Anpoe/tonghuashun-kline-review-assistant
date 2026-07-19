@@ -5,6 +5,7 @@ const state = {
   search: "",
   view: "overview",
   generatedAt: "",
+  selectedRecordId: "",
 };
 
 const $ = (selector) => document.querySelector(selector);
@@ -220,6 +221,7 @@ function render() {
 }
 
 function openRecord(record) {
+  state.selectedRecordId = record.id;
   $("#detailCode").textContent = record.code || "未识别代码";
   $("#detailTitle").textContent = record.stock;
   $("#detailMeta").textContent = `记录于 ${dateText(record.recordedAt)} · ${record.noteName}`;
@@ -230,7 +232,39 @@ function openRecord(record) {
   $("#detailChart").hidden = !record.chartImage;
   $("#detailResult").src = record.resultImage;
   $("#resultSection").hidden = !record.resultImage;
-  $("#recordDialog").showModal();
+  const dialog = $("#recordDialog");
+  dialog.scrollTop = 0;
+  dialog.showModal();
+  requestAnimationFrame(() => { dialog.scrollTop = 0; });
+}
+
+async function deleteSelectedRecord() {
+  const record = state.records.find((item) => item.id === state.selectedRecordId);
+  if (!record) return;
+  const confirmed = window.confirm(
+    `确定永久删除 ${record.stock} 的这条训练记录吗？\n\n对应的 Markdown 和未被其他记录使用的截图也会删除。`,
+  );
+  if (!confirmed) return;
+
+  const button = $("#deleteRecord");
+  button.disabled = true;
+  button.textContent = "删除中...";
+  try {
+    const response = await fetch(`/api/records/${encodeURIComponent(record.id)}`, { method: "DELETE" });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+    $("#recordDialog").close();
+    state.selectedRecordId = "";
+    state.generatedAt = "";
+    await loadData(false);
+    const retained = payload.imagesRetained?.length || 0;
+    toast(retained ? `记录已删除，${retained} 张占用中的截图未删除` : `已删除 ${record.stock} 的训练记录`);
+  } catch (error) {
+    toast(`删除失败：${error.message}`);
+  } finally {
+    button.disabled = false;
+    button.textContent = "删除记录";
+  }
 }
 
 function switchView(target) {
@@ -280,6 +314,7 @@ $$('[data-range]').forEach((button) => button.addEventListener("click", () => {
 $("#searchInput").addEventListener("input", (event) => { state.search = event.target.value; render(); });
 $("#outcomeFilter").addEventListener("change", (event) => { state.outcome = event.target.value; render(); });
 $("#refreshButton").addEventListener("click", () => loadData(true));
+$("#deleteRecord").addEventListener("click", deleteSelectedRecord);
 $("#closeDialog").addEventListener("click", () => $("#recordDialog").close());
 $("#recordDialog").addEventListener("click", (event) => { if (event.target === event.currentTarget) event.currentTarget.close(); });
 
