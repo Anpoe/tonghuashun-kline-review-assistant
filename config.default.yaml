@@ -45,16 +45,26 @@ capture:
     top: 1138
     right: 656
     bottom: 1348
-  quote_scan_region:
-    left: 0
-    top: 48
-    right: 656
-    bottom: 242
-  result_scan_region:
-    left: 0
-    top: 560
-    right: 656
-    bottom: 1120
+  start_counter_region:
+    left: 235
+    top: 1138
+    right: 421
+    bottom: 1348
+  training_center_ring_region:
+    left: 240
+    top: 1180
+    right: 416
+    bottom: 1348
+  result_anchor_scan_region:
+    left: 20
+    top: 680
+    right: 636
+    bottom: 980
+  result_profit_region:
+    left: 190
+    top: 430
+    right: 466
+    bottom: 530
   result_crop_region:
     left: 32
     top: 730
@@ -62,21 +72,19 @@ capture:
     bottom: 938
   training_orange_pixels: 1200
   training_blue_pixels: 1200
+  training_center_ring_pixels: 80
 
 session:
   require_start_30_30: true
   start_keywords:
     - "30/30"
     - "3030"
+  start_control_keywords:
+    - "结算"
+    - "买入"
+    - "观望"
   quote_ready_delay_seconds: 1.5
   result_ready_delay_seconds: 1.0
-  quote_keywords:
-    - "开"
-    - "高"
-    - "收"
-    - "低"
-    - "涨跌额"
-    - "涨跌幅"
   loaded_total_color_pixels: 5000
   loaded_left_color_pixels: 1200
   loaded_main_top_px: 55
@@ -107,6 +115,8 @@ stitching:
 ocr:
   enabled: true
   focused_scale: 1.5
+  start_counter_scale: 2.0
+  result_anchor_scale: 1.5
   result_anchor_keyword: "股票区间涨幅"
   result_keywords:
     - "再来一局"

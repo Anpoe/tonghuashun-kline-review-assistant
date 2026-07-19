@@ -42,8 +42,7 @@ TAG_COLOR_PATTERN = re.compile(r"#[0-9a-fA-F]{6}")
 
 DEFAULT_FOCUSED_OCR_REGIONS = {
     "training_control_region": {"left": 0, "top": 1138, "right": 656, "bottom": 1348},
-    "quote_scan_region": {"left": 0, "top": 48, "right": 656, "bottom": 242},
-    "result_scan_region": {"left": 0, "top": 560, "right": 656, "bottom": 1120},
+    "result_scan_region": {"left": 20, "top": 680, "right": 636, "bottom": 980},
 }
 
 def emit_status(
@@ -592,6 +591,13 @@ def color_pixel_count(image: Image.Image, lower: tuple[int, int, int], upper: tu
     return int(cv2.countNonZero(mask))
 
 
+def red_pink_pixel_count(image: Image.Image) -> int:
+    hsv = cv2.cvtColor(np.asarray(image), cv2.COLOR_RGB2HSV)
+    red = cv2.inRange(hsv, np.array([0, 90, 90], dtype=np.uint8), np.array([8, 255, 255], dtype=np.uint8))
+    pink = cv2.inRange(hsv, np.array([145, 70, 80], dtype=np.uint8), np.array([179, 255, 255], dtype=np.uint8))
+    return int(cv2.countNonZero(cv2.bitwise_or(red, pink)))
+
+
 def red_green_mask(image: Image.Image) -> np.ndarray:
     hsv = cv2.cvtColor(np.asarray(image), cv2.COLOR_RGB2HSV)
     red_low = cv2.inRange(hsv, np.array([0, 80, 80], dtype=np.uint8), np.array([10, 255, 255], dtype=np.uint8))
@@ -633,9 +639,22 @@ def is_training_page(screenshot: Image.Image, config: dict) -> bool:
     region = crop_relative(screenshot, rect_from_config_scaled(region_cfg, screenshot, config))
     orange_count = color_pixel_count(region, (0, 80, 120), (28, 255, 255))
     blue_count = color_pixel_count(region, (95, 70, 100), (125, 255, 255))
-    return orange_count >= int(config["capture"].get("training_orange_pixels", 1200)) and blue_count >= int(
-        config["capture"].get("training_blue_pixels", 1200)
+    ring_cfg = config["capture"].get("training_center_ring_region")
+    ring_count = 999999
+    if ring_cfg:
+        ring = crop_relative(screenshot, rect_from_config_scaled(ring_cfg, screenshot, config))
+        ring_count = red_pink_pixel_count(ring)
+    return (
+        orange_count >= int(config["capture"].get("training_orange_pixels", 1200))
+        and blue_count >= int(config["capture"].get("training_blue_pixels", 1200))
+        and ring_count >= int(config["capture"].get("training_center_ring_pixels", 80))
     )
+
+
+def has_training_controls(text: str, config: dict) -> bool:
+    compact = re.sub(r"\s+", "", text)
+    keywords = config.get("session", {}).get("start_control_keywords", ["结算", "买入", "观望"])
+    return any(str(keyword) in compact for keyword in keywords)
 
 
 def is_session_start(text: str, config: dict) -> bool:
@@ -644,15 +663,8 @@ def is_session_start(text: str, config: dict) -> bool:
     compact = re.sub(r"\s+", "", text)
     compact = compact.replace("\uff0f", "/")
     keywords = config.get("session", {}).get("start_keywords", [])
-    return any(keyword.replace("\uff0f", "/") in compact for keyword in keywords)
-
-
-def is_quote_ready(text: str, config: dict) -> bool:
-    if not text:
-        return False
-    compact = re.sub(r"\s+", "", text)
-    keywords = config.get("session", {}).get("quote_keywords", [])
-    return sum(1 for keyword in keywords if keyword in compact) >= 5
+    counter_detected = any(keyword.replace("\uff0f", "/") in compact for keyword in keywords)
+    return counter_detected and has_training_controls(text, config)
 
 
 def edge_gray(image: Image.Image) -> np.ndarray:
@@ -1116,6 +1128,7 @@ def main(
     quote_ready_detected = False
     result_detected = False
     home_detected = False
+    training_controls_detected = False
 
     while True:
         if stop_event is not None and getattr(stop_event, "is_set", lambda: False)():
@@ -1147,6 +1160,15 @@ def main(
         screenshot = capture_window(hwnd, window_rect, config["window"])
         now = time.time()
         training_page_detected = is_training_page(screenshot, config)
+        has_snapshots = (
+            start_frame is not None
+            or recovery_start_frame is not None
+            or recovery_latest_frame is not None
+        )
+        chart_loaded_detected = False
+        if training_page_detected:
+            chart_region = rect_from_config_scaled(config["capture"]["stitch_region"], screenshot, config)
+            chart_loaded_detected = is_chart_loaded(crop_relative(screenshot, chart_region), config)
         page_changed = last_training_page_detected is None or training_page_detected != last_training_page_detected
         last_training_page_detected = training_page_detected
         if page_changed:
@@ -1159,6 +1181,8 @@ def main(
             if start_frame is not None:
                 session_start_detected = True
                 quote_ready_detected = True
+            elif session_start_detected or training_controls_detected:
+                quote_ready_detected = chart_loaded_detected
         else:
             if nontraining_since is None:
                 nontraining_since = now
@@ -1167,42 +1191,42 @@ def main(
             if page_changed:
                 result_detected = False
                 home_detected = False
+                training_controls_detected = False
+            if not has_snapshots and not result_page_handled:
+                home_detected = True
 
         if pending_result_image is None and now - last_ocr_at >= ocr_seconds:
             focused_scale = float(config.get("ocr", {}).get("focused_scale", 1.5))
             ocr_performed = False
 
-            if training_page_detected and start_frame is None:
+            if training_page_detected and start_frame is None and not session_start_detected:
                 control_cfg = config.get("capture", {}).get(
+                    "start_counter_region"
+                ) or config.get("capture", {}).get(
                     "training_control_region"
                 ) or DEFAULT_FOCUSED_OCR_REGIONS["training_control_region"]
-                quote_cfg = config.get("capture", {}).get(
-                    "quote_scan_region"
-                ) or DEFAULT_FOCUSED_OCR_REGIONS["quote_scan_region"]
                 control_region = rect_from_config_scaled(control_cfg, screenshot, config)
-                quote_region = rect_from_config_scaled(quote_cfg, screenshot, config)
-                control_items = ocr.read_region_items(screenshot, control_region, focused_scale)
-                quote_items = ocr.read_region_items(screenshot, quote_region, focused_scale)
-                last_ocr_items = [*control_items, *quote_items]
+                start_scale = float(config.get("ocr", {}).get("start_counter_scale", 2.0))
+                control_items = ocr.read_region_items(screenshot, control_region, start_scale)
+                last_ocr_items = control_items
                 last_text = ocr.text_from_items(last_ocr_items)
                 last_ocr_screenshot = screenshot.copy()
+                training_controls_detected = has_training_controls(last_text, config)
                 session_start_detected = is_session_start(last_text, config)
-                quote_ready_detected = is_quote_ready(last_text, config)
+                quote_ready_detected = training_controls_detected and chart_loaded_detected
                 ocr_performed = True
 
-            elif not training_page_detected:
-                has_snapshots = (
-                    start_frame is not None
-                    or recovery_start_frame is not None
-                    or recovery_latest_frame is not None
-                )
+            elif not training_page_detected and not home_detected:
                 focused_items: list[object] = []
                 if has_snapshots:
                     result_region_cfg = config.get("capture", {}).get(
+                        "result_anchor_scan_region"
+                    ) or config.get("capture", {}).get(
                         "result_scan_region"
                     ) or DEFAULT_FOCUSED_OCR_REGIONS["result_scan_region"]
                     result_region = rect_from_config_scaled(result_region_cfg, screenshot, config)
-                    focused_items = ocr.read_region_items(screenshot, result_region, focused_scale)
+                    result_scale = float(config.get("ocr", {}).get("result_anchor_scale", focused_scale))
+                    focused_items = ocr.read_region_items(screenshot, result_region, result_scale)
                     last_ocr_items = focused_items
                     last_text = ocr.text_from_items(focused_items)
                     result_detected = is_result_page(last_text, result_anchor)
@@ -1293,13 +1317,15 @@ def main(
                 result_items = list(pending_result_items)
                 result_text = pending_result_text
                 result_region_cfg = config.get("capture", {}).get(
+                    "result_anchor_scan_region"
+                ) or config.get("capture", {}).get(
                     "result_scan_region"
                 ) or DEFAULT_FOCUSED_OCR_REGIONS["result_scan_region"]
                 result_region = rect_from_config_scaled(result_region_cfg, screenshot, config)
                 current_result_items = ocr.read_region_items(
                     screenshot,
                     result_region,
-                    float(config.get("ocr", {}).get("focused_scale", 1.5)),
+                    float(config.get("ocr", {}).get("result_anchor_scale", 1.5)),
                 )
                 current_result_text = ocr.text_from_items(current_result_items)
                 if is_result_page(current_result_text, result_anchor):
@@ -1307,10 +1333,20 @@ def main(
                     result_items = current_result_items
                     result_text = current_result_text
 
-                full_result_items = ocr.read_items(result_image)
-                if full_result_items:
-                    result_items = [*full_result_items, *result_items]
+                profit_cfg = config.get("capture", {}).get("result_profit_region")
+                profit_items: list[object] = []
+                if profit_cfg:
+                    profit_region = rect_from_config_scaled(profit_cfg, result_image, config)
+                    profit_items = ocr.read_region_items(result_image, profit_region, 2.0)
+                profit_text = ocr.text_from_items(profit_items)
+                if re.search(r"[+-]?\d+(?:\.\d+)?%", profit_text):
+                    result_items = [*profit_items, *result_items]
                     result_text = ocr.text_from_items(result_items)
+                else:
+                    full_result_items = ocr.read_items(result_image)
+                    if full_result_items:
+                        result_items = [*full_result_items, *result_items]
+                        result_text = ocr.text_from_items(result_items)
                 detail = "30/30 曾漏检，正在使用暂存盘面补录" if recovered else "识别到股票区间涨幅"
                 report_status("result", "已锁定结果页", detail)
                 print("[DONE] Result page detected. Writing review image...")
