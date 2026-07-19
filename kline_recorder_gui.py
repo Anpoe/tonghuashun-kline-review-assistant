@@ -257,15 +257,6 @@ class RecorderPanel:
             font=("Microsoft YaHei UI", 8),
             cursor="hand2",
         ).pack(side="left")
-        self.attach_label = tk.Label(
-            footer,
-            text="等待吸附",
-            bg=COLORS["surface"],
-            fg=COLORS["muted"],
-            font=("Microsoft YaHei UI", 8),
-        )
-        self.attach_label.pack(side="right", padx=8)
-
         self.history_label = tk.Label(
             self.body,
             text="",
@@ -391,14 +382,12 @@ class RecorderPanel:
                         panel_height,
                         win32con.SWP_NOACTIVATE | win32con.SWP_SHOWWINDOW,
                     )
-                self.attach_label.configure(text="已吸附")
             else:
                 if self.panel_topmost:
                     self.panel_topmost = False
                     self.root.attributes("-topmost", False)
-                self.attach_label.configure(text="等待吸附")
         except Exception:
-            self.attach_label.configure(text="等待吸附")
+            pass
         self.root.after(120, self._follow_training_window)
 
     def toggle_collapsed(self) -> None:
