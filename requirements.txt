@@ -1,0 +1,6 @@
+Pillow
+opencv-python
+pywin32
+PyYAML
+rapidocr-onnxruntime
+PyInstaller

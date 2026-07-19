@@ -1,0 +1,103 @@
+app:
+  version: "1.0.1"
+
+window:
+  title_contains:
+    - "K线训练营"
+  bring_to_front: false
+  min_width: 280
+  min_height: 560
+  preferred_width: 656
+  preferred_height: 1348
+  locate_by_blue_border: true
+  poll_seconds: 0.06
+  ocr_seconds: 0.25
+
+launcher:
+  executable: ""
+  auto_start: true
+
+paths:
+  obsidian_dir: ""
+  image_subdir: "images"
+  raw_frame_subdir: "_raw_frames"
+
+capture:
+  stitch_region:
+    left: 2
+    top: 190
+    right: 654
+    bottom: 1188
+  change_region:
+    left: 2
+    top: 190
+    right: 654
+    bottom: 1188
+  training_control_region:
+    left: 0
+    top: 1138
+    right: 656
+    bottom: 1348
+  result_crop_region:
+    left: 32
+    top: 730
+    right: 624
+    bottom: 938
+  training_orange_pixels: 1200
+  training_blue_pixels: 1200
+
+session:
+  require_start_30_30: true
+  start_keywords:
+    - "30/30"
+    - "3030"
+  quote_ready_delay_seconds: 1.5
+  result_ready_delay_seconds: 0.0
+  quote_keywords:
+    - "开"
+    - "高"
+    - "收"
+    - "低"
+    - "涨跌额"
+    - "涨跌幅"
+  loaded_total_color_pixels: 5000
+  loaded_left_color_pixels: 1200
+  loaded_main_top_px: 55
+  loaded_main_bottom_px: 470
+  loaded_main_color_pixels: 2500
+  loaded_main_vertical_components: 15
+
+stitching:
+  mode: "fixed_two_snapshots"
+  fixed_overlap_px: 0
+  gap_px: 24
+  duplicate_hint_width_px: 160
+  duplicate_hint_alpha: 28
+  duplicate_hint_border_alpha: 120
+  overlap_min_px: 120
+  overlap_max_px: 260
+  overlap_step_px: 4
+  overlap_scale_min: 0.90
+  overlap_scale_max: 1.10
+  overlap_scale_step: 0.02
+  min_shift_px: 4
+  max_shift_px: 44
+  min_change_score: 3.0
+  accept_overlap_score: 18.0
+  fallback_append_px: 12
+  save_raw_frames: true
+
+ocr:
+  enabled: true
+  result_anchor_keyword: "股票区间涨幅"
+  result_keywords:
+    - "再来一局"
+    - "返回首页"
+    - "本局收益"
+  home_keywords:
+    - "单人练习模式"
+    - "指标训练"
+    - "分时训练"
+    - "闯关模式"
+    - "训练记录"
+    - "排行榜"
