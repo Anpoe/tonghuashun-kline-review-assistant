@@ -116,20 +116,19 @@ namespace KlineReviewAssistantLauncher
                 detailLabel.Text = "请保持网络连接，完成后会自动打开助手";
             }
 
-            string output;
-            string error;
             int exitCode;
             try
             {
                 var startInfo = new ProcessStartInfo
                 {
                     FileName = Environment.GetEnvironmentVariable("COMSPEC") ?? "cmd.exe",
-                    Arguments = "/d /s /c \"call \"\"" + startScript + "\"\" --no-pause\"",
+                    // WorkingDirectory already points at the repository. Keeping the
+                    // batch path relative avoids cmd.exe's fragile nested quoting for
+                    // non-ASCII absolute paths.
+                    Arguments = "/d /s /c \"call start_recorder.bat --no-pause\"",
                     WorkingDirectory = root,
                     UseShellExecute = false,
-                    CreateNoWindow = true,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true
+                    CreateNoWindow = true
                 };
 
                 using (var process = Process.Start(startInfo))
@@ -139,11 +138,7 @@ namespace KlineReviewAssistantLauncher
                         throw new InvalidOperationException("Windows 无法创建启动进程。");
                     }
 
-                    var outputTask = process.StandardOutput.ReadToEndAsync();
-                    var errorTask = process.StandardError.ReadToEndAsync();
                     await Task.Run(delegate { process.WaitForExit(); });
-                    output = await outputTask;
-                    error = await errorTask;
                     exitCode = process.ExitCode;
                 }
             }
@@ -155,15 +150,28 @@ namespace KlineReviewAssistantLauncher
 
             if (exitCode != 0)
             {
-                var details = (output + Environment.NewLine + error).Trim();
-                if (details.Length > 1200)
-                {
-                    details = details.Substring(details.Length - 1200);
-                }
+                var details = "start_recorder.bat 返回错误代码 " + exitCode + "。";
+                var logPath = WriteLauncherLog(details);
                 ShowFailure(
                     "运行环境准备失败",
                     "请确认已安装 Python 3.11 或更高版本，然后重试。" +
-                    (details.Length > 0 ? Environment.NewLine + Environment.NewLine + details : string.Empty)
+                    Environment.NewLine + Environment.NewLine +
+                    "诊断日志：" + logPath
+                );
+                return;
+            }
+
+            statusLabel.Text = "正在等待助手窗口...";
+            detailLabel.Text = "启动完成后此窗口会自动关闭";
+            var assistantReady = await WaitForAssistantWindowAsync(TimeSpan.FromSeconds(20));
+            if (!assistantReady)
+            {
+                var logPath = WriteLauncherLog("启动命令执行成功，但没有检测到助手窗口。");
+                ShowFailure(
+                    "助手没有成功打开",
+                    "启动命令已经执行，但 20 秒内没有检测到 K线复盘助手窗口。" +
+                    Environment.NewLine + Environment.NewLine +
+                    "诊断日志：" + logPath
                 );
                 return;
             }
@@ -174,6 +182,58 @@ namespace KlineReviewAssistantLauncher
             detailLabel.Text = "此窗口将自动关闭";
             await Task.Delay(450);
             Close();
+        }
+
+        private static async Task<bool> WaitForAssistantWindowAsync(TimeSpan timeout)
+        {
+            var deadline = DateTime.UtcNow + timeout;
+            while (DateTime.UtcNow < deadline)
+            {
+                foreach (var process in Process.GetProcesses())
+                {
+                    try
+                    {
+                        if (process.MainWindowTitle == "K线复盘助手")
+                        {
+                            return true;
+                        }
+                    }
+                    catch
+                    {
+                        // A process can exit while its window title is being read.
+                    }
+                    finally
+                    {
+                        process.Dispose();
+                    }
+                }
+
+                await Task.Delay(250);
+            }
+
+            return false;
+        }
+
+        private static string WriteLauncherLog(string details)
+        {
+            try
+            {
+                var logDirectory = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                    "KlineReviewAssistant"
+                );
+                Directory.CreateDirectory(logDirectory);
+                var logPath = Path.Combine(logDirectory, "launcher-error.log");
+                File.WriteAllText(
+                    logPath,
+                    DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") + Environment.NewLine + details
+                );
+                return logPath;
+            }
+            catch
+            {
+                return "无法写入诊断日志";
+            }
         }
 
         private void ShowFailure(string title, string details)
