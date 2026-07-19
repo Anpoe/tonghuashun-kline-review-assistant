@@ -10,8 +10,12 @@ window:
   preferred_width: 656
   preferred_height: 1348
   locate_by_blue_border: true
+  blue_border_refresh_seconds: 0.5
+  missing_window_poll_seconds: 0.2
   poll_seconds: 0.06
   ocr_seconds: 0.25
+  state_ocr_seconds: 0.12
+  home_ocr_seconds: 0.6
 
 launcher:
   executable: ""
@@ -102,7 +106,7 @@ stitching:
 
 ocr:
   enabled: true
-  focused_scale: 2.0
+  focused_scale: 1.5
   result_anchor_keyword: "股票区间涨幅"
   result_keywords:
     - "再来一局"

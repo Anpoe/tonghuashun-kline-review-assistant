@@ -8,9 +8,11 @@ from unittest.mock import patch
 from PIL import Image
 
 from kline_recorder import (
+    _BLUE_BORDER_CAPTURE_CACHE,
     OcrReader,
     Rect,
     active_config_path,
+    capture_window,
     has_result_anchor,
     is_session_start,
     normalize_tags,
@@ -88,6 +90,31 @@ class RecorderDetectionTests(unittest.TestCase):
             ):
                 self.assertEqual(active_config_path(), user_config)
                 self.assertFalse(requires_initial_setup())
+
+    def test_blue_border_capture_reuses_recent_location(self) -> None:
+        hwnd = 987654
+        window_rect = Rect(100, 100, 756, 1448)
+        capture_rect = Rect(120, 140, 776, 1488)
+        located_image = Image.new("RGB", (656, 1348), "navy")
+        cached_image = Image.new("RGB", (656, 1348), "black")
+        _BLUE_BORDER_CAPTURE_CACHE.pop(hwnd, None)
+        try:
+            with (
+                patch(
+                    "kline_recorder.capture_training_window_by_blue_border",
+                    return_value=(located_image, capture_rect),
+                ) as locate,
+                patch("kline_recorder.ImageGrab.grab", return_value=cached_image) as grab,
+                patch("kline_recorder.time.monotonic", side_effect=(10.0, 10.1)),
+            ):
+                first = capture_window(hwnd, window_rect, {"locate_by_blue_border": True})
+                second = capture_window(hwnd, window_rect, {"locate_by_blue_border": True})
+            self.assertEqual(first.getpixel((0, 0)), (0, 0, 128))
+            self.assertEqual(second.getpixel((0, 0)), (0, 0, 0))
+            self.assertEqual(locate.call_count, 1)
+            self.assertEqual(grab.call_count, 1)
+        finally:
+            _BLUE_BORDER_CAPTURE_CACHE.pop(hwnd, None)
 
     def test_writes_normalized_tags_to_markdown(self) -> None:
         tags = normalize_tags(
