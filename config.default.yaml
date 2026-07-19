@@ -83,7 +83,9 @@ session:
     - "结算"
     - "买入"
     - "观望"
-  quote_ready_delay_seconds: 1.5
+  start_capture_stable_seconds: 0.18
+  start_capture_max_wait_seconds: 1.5
+  start_capture_max_change_ratio: 0.02
   result_ready_delay_seconds: 1.0
   loaded_total_color_pixels: 5000
   loaded_left_color_pixels: 1200
@@ -91,6 +93,9 @@ session:
   loaded_main_bottom_px: 470
   loaded_main_color_pixels: 2500
   loaded_main_vertical_components: 15
+  loaded_ma_required_lines: 3
+  loaded_ma_min_pixels: 180
+  loaded_ma_min_columns: 120
 
 stitching:
   mode: "fixed_two_snapshots"

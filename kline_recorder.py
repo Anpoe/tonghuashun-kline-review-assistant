@@ -606,6 +606,57 @@ def red_green_mask(image: Image.Image) -> np.ndarray:
     return cv2.bitwise_or(cv2.bitwise_or(red_low, red_high), green)
 
 
+def moving_average_line_masks(image: Image.Image) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    hsv = cv2.cvtColor(np.asarray(image), cv2.COLOR_RGB2HSV)
+    magenta = cv2.inRange(
+        hsv,
+        np.array([140, 90, 100], dtype=np.uint8),
+        np.array([179, 255, 255], dtype=np.uint8),
+    )
+    yellow = cv2.inRange(
+        hsv,
+        np.array([12, 100, 110], dtype=np.uint8),
+        np.array([38, 255, 255], dtype=np.uint8),
+    )
+    blue = cv2.inRange(
+        hsv,
+        np.array([95, 90, 100], dtype=np.uint8),
+        np.array([125, 255, 255], dtype=np.uint8),
+    )
+    return magenta, yellow, blue
+
+
+def moving_average_lines_loaded(main_chart: Image.Image, config: dict) -> bool:
+    session_cfg = config.get("session", {})
+    width = max(main_chart.width, 1)
+    width_scale = width / 652.0
+    min_pixels = max(1, int(float(session_cfg.get("loaded_ma_min_pixels", 180)) * width_scale))
+    min_columns = max(1, int(float(session_cfg.get("loaded_ma_min_columns", 120)) * width_scale))
+    required_lines = int(session_cfg.get("loaded_ma_required_lines", 3))
+
+    ready_lines = 0
+    for mask in moving_average_line_masks(main_chart):
+        pixel_count = cv2.countNonZero(mask)
+        occupied_columns = int(np.count_nonzero(np.any(mask > 0, axis=0)))
+        if pixel_count >= min_pixels and occupied_columns >= min_columns:
+            ready_lines += 1
+    return ready_lines >= required_lines
+
+
+def chart_paint_change_ratio(previous: Image.Image, current: Image.Image, config: dict) -> float:
+    if previous.size != current.size:
+        return 100.0
+    session_cfg = config.get("session", {})
+    top = max(0, min(int(session_cfg.get("loaded_main_top_px", 55)), current.height))
+    bottom = max(top, min(int(session_cfg.get("loaded_main_bottom_px", 470)), current.height))
+    previous_array = np.asarray(previous.crop((0, top, previous.width, bottom)), dtype=np.int16)
+    current_array = np.asarray(current.crop((0, top, current.width, bottom)), dtype=np.int16)
+    if previous_array.size == 0:
+        return 100.0
+    changed = np.max(np.abs(previous_array - current_array), axis=2) >= 12
+    return float(np.count_nonzero(changed) * 100.0 / changed.size)
+
+
 def is_chart_loaded(viewport: Image.Image, config: dict) -> bool:
     mask = red_green_mask(viewport)
     height, width = mask.shape
@@ -616,6 +667,7 @@ def is_chart_loaded(viewport: Image.Image, config: dict) -> bool:
     main_bottom = max(main_top, min(int(session_cfg.get("loaded_main_bottom_px", 470)), height))
     main_mask = mask[main_top:main_bottom, :]
     main_count = cv2.countNonZero(main_mask)
+    main_chart = viewport.crop((0, main_top, width, main_bottom))
 
     component_count, _labels, stats, _centroids = cv2.connectedComponentsWithStats(main_mask, 8)
     vertical_components = 0
@@ -629,6 +681,7 @@ def is_chart_loaded(viewport: Image.Image, config: dict) -> bool:
         and left_count >= int(session_cfg.get("loaded_left_color_pixels", 1200))
         and main_count >= int(session_cfg.get("loaded_main_color_pixels", 2500))
         and vertical_components >= int(session_cfg.get("loaded_main_vertical_components", 15))
+        and moving_average_lines_loaded(main_chart, config)
     )
 
 
@@ -1109,6 +1162,8 @@ def main(
     last_ocr_items: list[object] = []
     last_ocr_screenshot: Image.Image | None = None
     quote_ready_since: float | None = None
+    start_chart_previous: Image.Image | None = None
+    start_chart_stable_since: float | None = None
     result_ready_since: float | None = None
     result_page_handled = False
     pending_result_image: Image.Image | None = None
@@ -1266,11 +1321,12 @@ def main(
         if home_detected:
             if start_frame is not None:
                 print("[RESET] Home page detected. Cached snapshots cleared.")
-                report_status("home", "已回到主菜单，记录已重置")
                 start_frame = None
                 latest_frame = None
                 last_latest_change_crop = None
                 quote_ready_since = None
+                start_chart_previous = None
+                start_chart_stable_since = None
                 result_ready_since = None
                 result_page_handled = False
                 recovery_start_frame = None
@@ -1279,11 +1335,10 @@ def main(
                 pending_result_image = None
                 pending_result_items = []
                 pending_result_text = ""
-            else:
-                if now - last_state_log_at >= 5.0:
-                    print("[WAIT] Home page detected. Waiting for a 30/30 training chart...")
-                    last_state_log_at = now
-                report_status("home", "当前在主菜单", "等待开始一局 K 线训练")
+            if now - last_state_log_at >= 5.0:
+                print("[WAIT] Home page detected. Waiting for a 30/30 training chart...")
+                last_state_log_at = now
+            report_status("home", "当前在主菜单", "等待开始一局 K 线训练")
             time.sleep(poll_seconds)
             continue
 
@@ -1376,6 +1431,8 @@ def main(
                 latest_frame = None
                 last_latest_change_crop = None
                 quote_ready_since = None
+                start_chart_previous = None
+                start_chart_stable_since = None
                 result_ready_since = None
                 recovery_start_frame = None
                 recovery_latest_frame = None
@@ -1411,6 +1468,8 @@ def main(
         if start_frame is None:
             if not session_start_detected:
                 quote_ready_since = None
+                start_chart_previous = None
+                start_chart_stable_since = None
                 result_ready_since = None
                 if quote_ready_detected:
                     if recovery_start_frame is None:
@@ -1436,21 +1495,44 @@ def main(
                 continue
             if not quote_ready_detected:
                 quote_ready_since = None
+                start_chart_previous = None
+                start_chart_stable_since = None
                 if now - last_loading_log_at >= 1.0:
-                    print("[WAIT] 30/30 detected, waiting for top quote data...")
+                    print("[WAIT] 30/30 detected, waiting for the chart and moving averages...")
                     last_loading_log_at = now
-                report_status("loading", "检测到 30/30", "等待顶部行情加载")
+                report_status("loading", "检测到 30/30", "等待 K 线和均线完整加载")
                 time.sleep(poll_seconds)
                 continue
             if quote_ready_since is None:
                 quote_ready_since = now
-                quote_delay = float(config.get("session", {}).get("quote_ready_delay_seconds", 1.0))
-                print(f"[WAIT] Top quote data detected. Waiting {quote_delay:.1f}s for chart paint...")
-                report_status("loading", "顶部行情已加载", f"等待 {quote_delay:.1f} 秒截取开始盘面")
+                start_chart_previous = viewport.copy()
+                start_chart_stable_since = None
+                print("[WAIT] Complete chart detected. Confirming that paint is stable...")
+                report_status("loading", "K 线已完整加载", "正在确认画面稳定")
                 time.sleep(poll_seconds)
                 continue
-            quote_delay = float(config.get("session", {}).get("quote_ready_delay_seconds", 1.0))
-            if now - quote_ready_since < quote_delay:
+
+            stable_seconds = float(config.get("session", {}).get("start_capture_stable_seconds", 0.18))
+            max_wait_seconds = float(config.get("session", {}).get("start_capture_max_wait_seconds", 1.5))
+            max_change_ratio = float(config.get("session", {}).get("start_capture_max_change_ratio", 0.02))
+            paint_change = (
+                chart_paint_change_ratio(start_chart_previous, viewport, config)
+                if start_chart_previous is not None
+                else 100.0
+            )
+            start_chart_previous = viewport.copy()
+            if paint_change <= max_change_ratio:
+                if start_chart_stable_since is None:
+                    start_chart_stable_since = now
+            else:
+                start_chart_stable_since = None
+
+            stable_ready = (
+                start_chart_stable_since is not None
+                and now - start_chart_stable_since >= stable_seconds
+            )
+            timeout_ready = now - quote_ready_since >= max_wait_seconds
+            if not stable_ready and not timeout_ready:
                 time.sleep(poll_seconds)
                 continue
             start_frame = viewport
@@ -1460,6 +1542,8 @@ def main(
             recovery_latest_frame = None
             recovery_change_crop = None
             quote_ready_since = None
+            start_chart_previous = None
+            start_chart_stable_since = None
             print(f"[START] Captured initial 30/30 snapshot. Window={screenshot.width}x{screenshot.height}")
             report_status("captured", "已截取开始盘面", "正在记录本局训练")
             time.sleep(poll_seconds)

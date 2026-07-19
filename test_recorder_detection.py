@@ -5,7 +5,7 @@ import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
-from PIL import Image
+from PIL import Image, ImageDraw
 
 from kline_recorder import (
     _BLUE_BORDER_CAPTURE_CACHE,
@@ -13,10 +13,12 @@ from kline_recorder import (
     Rect,
     active_config_path,
     capture_window,
+    chart_paint_change_ratio,
     has_training_controls,
     has_result_anchor,
     is_training_page,
     is_session_start,
+    moving_average_lines_loaded,
     normalize_tags,
     ocr_item_rect,
     requires_initial_setup,
@@ -75,6 +77,30 @@ class RecorderDetectionTests(unittest.TestCase):
             for y in range(1200, 1220):
                 image.putpixel((x, y), (255, 0, 80))
         self.assertTrue(is_training_page(image, config))
+
+    def test_chart_requires_all_three_moving_average_lines(self) -> None:
+        image = Image.new("RGB", (652, 415), (18, 18, 38))
+        draw = ImageDraw.Draw(image)
+        draw.line((40, 100, 600, 180), fill=(240, 25, 175), width=3)
+        draw.line((80, 190, 600, 230), fill=(240, 175, 25), width=3)
+        config = {
+            "session": {
+                "loaded_ma_required_lines": 3,
+                "loaded_ma_min_pixels": 180,
+                "loaded_ma_min_columns": 120,
+            }
+        }
+        self.assertFalse(moving_average_lines_loaded(image, config))
+        draw.line((180, 260, 600, 290), fill=(20, 125, 245), width=3)
+        self.assertTrue(moving_average_lines_loaded(image, config))
+
+    def test_chart_paint_stability_detects_newly_drawn_content(self) -> None:
+        config = {"session": {"loaded_main_top_px": 55, "loaded_main_bottom_px": 470}}
+        previous = Image.new("RGB", (652, 998), (18, 18, 38))
+        current = previous.copy()
+        self.assertEqual(chart_paint_change_ratio(previous, current, config), 0.0)
+        ImageDraw.Draw(current).rectangle((100, 100, 250, 180), fill=(240, 25, 50))
+        self.assertGreater(chart_paint_change_ratio(previous, current, config), 0.02)
 
     def test_result_anchor_accepts_split_ocr_text(self) -> None:
         self.assertTrue(has_result_anchor("南极电商\n股票区间涨幅\n-8.03%"))
