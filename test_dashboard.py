@@ -25,7 +25,11 @@ class DashboardTests(unittest.TestCase):
         stock: str,
         profit: str,
         image: str = "images/chart.png",
+        tags: str = "",
     ) -> Path:
+        tag_lines = ""
+        if tags:
+            tag_lines = f"- 标签：{tags}\n- 标签颜色：{{\"突破\":\"#ef4444\",\"低吸\":\"#3b82f6\"}}\n"
         note = self.root / name
         note.write_text(
             f"# {stock} {profit}\n\n"
@@ -33,6 +37,7 @@ class DashboardTests(unittest.TestCase):
             "- 训练区间：20251212 - 20260403\n"
             f"- 本局收益：{profit}\n"
             "- 记录时间：2026-06-20 14:03:14\n\n"
+            f"{tag_lines}"
             f"![[{image}]]\n",
             encoding="utf-8",
         )
@@ -53,6 +58,15 @@ class DashboardTests(unittest.TestCase):
         self.assertIsNotNone(record)
         self.assertEqual(record.stock, "信科移动")
         self.assertEqual(record.profit, 6.54)
+
+    def test_parses_colored_tags(self) -> None:
+        note = self.write_note("tagged.md", "浙农股份", "2.11%", tags="突破, 低吸")
+        record = parse_review_note(note, self.root)
+        self.assertIsNotNone(record)
+        self.assertEqual(
+            [(tag.name, tag.color) for tag in record.tags],
+            [("突破", "#ef4444"), ("低吸", "#3b82f6")],
+        )
 
     def test_repository_summary_and_media_guard(self) -> None:
         self.write_note("winner.md", "浙农股份", "2.00%")

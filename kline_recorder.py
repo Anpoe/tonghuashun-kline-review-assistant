@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ctypes
+import json
 import os
 import re
 import shutil
@@ -34,6 +35,10 @@ USER_CONFIG_DIR = Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roam
 USER_CONFIG_PATH = USER_CONFIG_DIR / "config.yaml"
 
 StatusCallback = Callable[[str, str, str], None]
+TagProvider = Callable[[], Iterable[object]]
+
+DEFAULT_TAG_COLOR = "#6b7280"
+TAG_COLOR_PATTERN = re.compile(r"#[0-9a-fA-F]{6}")
 
 DEFAULT_FOCUSED_OCR_REGIONS = {
     "training_control_region": {"left": 0, "top": 1138, "right": 656, "bottom": 1348},
@@ -54,6 +59,30 @@ def emit_status(
         callback(state, message, detail)
     except Exception:
         pass
+
+
+def normalize_tags(values: Iterable[object]) -> list[dict[str, str]]:
+    tags: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for value in values:
+        if isinstance(value, str):
+            raw_name = value
+            raw_color = DEFAULT_TAG_COLOR
+        elif isinstance(value, dict):
+            raw_name = str(value.get("name", ""))
+            raw_color = str(value.get("color", DEFAULT_TAG_COLOR))
+        else:
+            continue
+
+        name = re.sub(r"[\r\n,，;；#]+", " ", raw_name).strip()
+        name = " ".join(name.split())[:20]
+        key = name.casefold()
+        if not name or key in seen:
+            continue
+        color = raw_color.lower() if TAG_COLOR_PATTERN.fullmatch(raw_color) else DEFAULT_TAG_COLOR
+        tags.append({"name": name, "color": color})
+        seen.add(key)
+    return tags
 
 
 @dataclass(frozen=True)
@@ -937,6 +966,7 @@ def write_obsidian_note(
     metadata: dict[str, str],
     config: dict,
     result_ocr_items: Iterable[object] = (),
+    tags: Iterable[object] = (),
 ) -> Path:
     now = datetime.now()
     obsidian_dir.mkdir(parents=True, exist_ok=True)
@@ -959,12 +989,24 @@ def write_obsidian_note(
         note_path = obsidian_dir / f"{note_stem}_{suffix}.md"
         suffix += 1
 
+    normalized_tags = normalize_tags(tags)
+    tag_lines = ""
+    if normalized_tags:
+        tag_names = ", ".join(tag["name"] for tag in normalized_tags)
+        tag_colors = json.dumps(
+            {tag["name"]: tag["color"] for tag in normalized_tags},
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        tag_lines = f"- 标签：{tag_names}\n- 标签颜色：{tag_colors}\n"
+
     note = (
         f"# {title}\n\n"
         f"- \u80a1\u7968\uff1a{metadata['stock']}{code_part}\n"
         f"- \u8bad\u7ec3\u533a\u95f4\uff1a{metadata['date_range'] or '\u672a\u8bc6\u522b'}\n"
         f"- \u672c\u5c40\u6536\u76ca\uff1a{metadata['profit']}\n"
-        f"- \u8bb0\u5f55\u65f6\u95f4\uff1a{now:%Y-%m-%d %H:%M:%S}\n\n"
+        f"- \u8bb0\u5f55\u65f6\u95f4\uff1a{now:%Y-%m-%d %H:%M:%S}\n"
+        f"{tag_lines}\n"
         f"![[{image_subdir}/{stitched_name}]]\n\n"
         f"![[{image_subdir}/{result_card_name}]]\n"
     )
@@ -985,6 +1027,7 @@ def save_raw_frames(obsidian_dir: Path, subdir: str, frames: list[Image.Image]) 
 def main(
     status_callback: StatusCallback | None = None,
     stop_event: object | None = None,
+    tag_provider: TagProvider | None = None,
 ) -> int:
     enable_dpi_awareness()
     config = load_config()
@@ -1159,6 +1202,10 @@ def main(
                 print("[DONE] Result page detected. Writing review image...")
                 emit_status(status_callback, "saving", "正在生成总结", "拼接截图并写入 Obsidian")
                 metadata = parse_metadata(last_text)
+                try:
+                    selected_tags = normalize_tags(tag_provider() if tag_provider is not None else ())
+                except Exception:
+                    selected_tags = []
                 frames = [start_frame, latest_frame]
                 stitched = stitch_frames(frames, config)
                 note_path = write_obsidian_note(
@@ -1169,6 +1216,7 @@ def main(
                     metadata,
                     config,
                     last_ocr_items,
+                    selected_tags,
                 )
                 if bool(config["stitching"]["save_raw_frames"]):
                     save_raw_frames(obsidian_dir, raw_frame_subdir, frames)

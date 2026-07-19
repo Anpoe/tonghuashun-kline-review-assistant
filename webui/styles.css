@@ -113,9 +113,13 @@ h1 { margin: 0; font-size: 24px; line-height: 1.25; }
 .profit.negative { color: var(--red); }
 .profit.flat { color: var(--yellow); }
 .row-arrow { color: var(--muted); text-align: right; font-size: 18px; }
+.tag-list { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5px; }
+.stock-cell .tag-list { display: flex; }
+.tag-chip { display: inline-flex; width: fit-content; min-height: 18px; align-items: center; padding: 1px 6px; border: 1px solid color-mix(in srgb, var(--tag-color) 50%, transparent); border-radius: 3px; background: color-mix(in srgb, var(--tag-color) 13%, transparent); color: var(--tag-color); font-size: 9px; line-height: 1.4; white-space: nowrap; }
 
 .history-band { margin: 28px 0 0; padding: 18px 20px; border: 1px solid var(--border); background: var(--surface); display: flex; align-items: center; justify-content: space-between; }
 .history-band select { height: 36px; min-width: 125px; padding: 0 30px 0 10px; border: 1px solid var(--border); border-radius: 4px; background: var(--surface-2); color: var(--text); }
+.history-filters { display: flex; gap: 8px; }
 .table-wrap { position: relative; border: 1px solid var(--border); border-top: 0; background: var(--surface); overflow-x: auto; }
 table { width: 100%; border-collapse: collapse; min-width: 720px; }
 th { height: 40px; padding: 0 18px; border-bottom: 1px solid var(--border); color: var(--muted); font-size: 10px; text-align: left; font-weight: 600; }
@@ -135,6 +139,7 @@ dialog::backdrop { background: rgba(5, 7, 10, .76); }
 .dialog-shell > header { position: sticky; top: 0; z-index: 2; padding: 20px 24px; border-bottom: 1px solid var(--border); background: var(--surface); display: flex; justify-content: space-between; gap: 18px; }
 .dialog-shell header h2 { margin: 4px 0; font-size: 20px; }
 .dialog-shell header p { margin: 0; color: var(--muted); font-size: 11px; }
+.detail-tags .tag-list { margin-top: 8px; }
 .stock-code { color: var(--accent); font: 700 10px/1 "Segoe UI"; }
 .dialog-shell > header > div:first-child { min-width: 0; }
 .dialog-actions { display: flex; flex: none; align-items: center; gap: 8px; }
@@ -195,6 +200,7 @@ dialog::backdrop { background: rgba(5, 7, 10, .76); }
   .recent-row { grid-template-columns: minmax(130px, 1fr) 80px 18px; gap: 10px; }
   .recent-row .date-cell { display: none; }
   .history-band { align-items: flex-start; }
+  .history-filters { flex-direction: column; }
   .detail-metrics { grid-template-columns: 1fr; }
   .detail-metrics div { border-right: 0; border-bottom: 1px solid var(--border); }
 }

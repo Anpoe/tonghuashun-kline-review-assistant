@@ -39,8 +39,8 @@
         </div>
         <div class="topbar-actions">
           <label class="search-box">
-            <span class="sr-only">搜索股票</span>
-            <input id="searchInput" type="search" placeholder="搜索股票或代码" autocomplete="off">
+            <span class="sr-only">搜索股票、代码或标签</span>
+            <input id="searchInput" type="search" placeholder="搜索股票、代码或标签" autocomplete="off">
           </label>
           <div class="range-control" aria-label="时间范围">
             <button data-range="30">30天</button>
@@ -128,12 +128,17 @@
             <h2>全部训练记录</h2>
             <p id="historyCount">共 0 条</p>
           </div>
-          <select id="outcomeFilter" aria-label="筛选结果">
-            <option value="all">全部结果</option>
-            <option value="positive">仅盈利</option>
-            <option value="flat">仅持平</option>
-            <option value="negative">仅亏损</option>
-          </select>
+          <div class="history-filters">
+            <select id="tagFilter" aria-label="筛选标签">
+              <option value="all">全部标签</option>
+            </select>
+            <select id="outcomeFilter" aria-label="筛选结果">
+              <option value="all">全部结果</option>
+              <option value="positive">仅盈利</option>
+              <option value="flat">仅持平</option>
+              <option value="negative">仅亏损</option>
+            </select>
+          </div>
         </section>
         <div class="table-wrap">
           <table>
@@ -164,6 +169,7 @@
           <span id="detailCode" class="stock-code"></span>
           <h2 id="detailTitle">训练详情</h2>
           <p id="detailMeta"></p>
+          <div id="detailTags" class="detail-tags"></div>
         </div>
         <div class="dialog-actions">
           <button id="deleteRecord" class="danger-button" type="button">删除记录</button>

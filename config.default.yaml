@@ -22,6 +22,9 @@ paths:
   image_subdir: "images"
   raw_frame_subdir: "_raw_frames"
 
+tags:
+  presets: []
+
 capture:
   stitch_region:
     left: 2

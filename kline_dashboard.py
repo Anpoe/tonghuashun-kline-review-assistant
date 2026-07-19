@@ -23,6 +23,8 @@ CODE_PATTERN = re.compile(r"(?:^|\s)(\d{6})$")
 DATE_RANGE_PATTERN = re.compile(r"(\d{8})\s*[-—–_]\s*(\d{8})")
 RECORD_ID_PATTERN = re.compile(r"[0-9a-f]{16}")
 DELETABLE_IMAGE_SUFFIXES = {".bmp", ".jpeg", ".jpg", ".png", ".webp"}
+TAG_COLOR_PATTERN = re.compile(r"#[0-9a-fA-F]{6}")
+DEFAULT_TAG_COLOR = "#6b7280"
 
 
 def resource_path(*parts: str) -> Path:
@@ -49,6 +51,15 @@ def _safe_relative_path(root: Path, value: str) -> Path | None:
 
 
 @dataclass(frozen=True)
+class ReviewTag:
+    name: str
+    color: str
+
+    def to_json(self) -> dict[str, str]:
+        return {"name": self.name, "color": self.color}
+
+
+@dataclass(frozen=True)
 class ReviewRecord:
     record_id: str
     stock: str
@@ -61,6 +72,7 @@ class ReviewRecord:
     note_name: str
     chart_image: str
     result_image: str
+    tags: tuple[ReviewTag, ...]
 
     def to_json(self) -> dict[str, object]:
         return {
@@ -75,6 +87,7 @@ class ReviewRecord:
             "noteName": self.note_name,
             "chartImage": self._media_url(self.chart_image),
             "resultImage": self._media_url(self.result_image),
+            "tags": [tag.to_json() for tag in self.tags],
         }
 
     @staticmethod
@@ -131,7 +144,41 @@ def parse_review_note(note_path: Path, root: Path) -> ReviewRecord | None:
         note_name=note_path.name,
         chart_image=chart_image,
         result_image=result_image,
+        tags=parse_review_tags(fields),
     )
+
+
+def parse_review_tags(fields: dict[str, str]) -> tuple[ReviewTag, ...]:
+    raw_names = fields.get("标签", "").strip()
+    if not raw_names:
+        return ()
+
+    if "," in raw_names or "，" in raw_names:
+        names = re.split(r"[,，]", raw_names)
+    else:
+        hash_names = re.findall(r"#([^#\s]+)", raw_names)
+        names = hash_names or [raw_names]
+
+    colors: dict[str, str] = {}
+    try:
+        loaded_colors = json.loads(fields.get("标签颜色", "{}"))
+        if isinstance(loaded_colors, dict):
+            colors = {str(key): str(value) for key, value in loaded_colors.items()}
+    except (TypeError, ValueError, json.JSONDecodeError):
+        pass
+
+    tags: list[ReviewTag] = []
+    seen: set[str] = set()
+    for raw_name in names:
+        name = raw_name.strip().lstrip("#")[:20]
+        key = name.casefold()
+        if not name or key in seen:
+            continue
+        raw_color = colors.get(name, DEFAULT_TAG_COLOR)
+        color = raw_color.lower() if TAG_COLOR_PATTERN.fullmatch(raw_color) else DEFAULT_TAG_COLOR
+        tags.append(ReviewTag(name=name, color=color))
+        seen.add(key)
+    return tuple(tags)
 
 
 class ReviewRepository:
@@ -232,7 +279,7 @@ class ReviewRepository:
         losses = [profit for profit in profits if profit < 0]
 
         return {
-            "generatedAt": datetime.now().isoformat(timespec="seconds"),
+            "generatedAt": datetime.now().isoformat(timespec="milliseconds"),
             "summary": {
                 "total": len(records),
                 "valid": len(valid),

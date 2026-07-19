@@ -1,10 +1,21 @@
 from __future__ import annotations
 
 import unittest
+import tempfile
+from pathlib import Path
+from unittest.mock import patch
 
 from PIL import Image
 
-from kline_recorder import OcrReader, Rect, has_result_anchor, is_session_start, ocr_item_rect
+from kline_recorder import (
+    OcrReader,
+    Rect,
+    has_result_anchor,
+    is_session_start,
+    normalize_tags,
+    ocr_item_rect,
+    write_obsidian_note,
+)
 
 
 class StubOcrReader(OcrReader):
@@ -44,6 +55,28 @@ class RecorderDetectionTests(unittest.TestCase):
         rect = ocr_item_rect(items[0])
         self.assertEqual(rect, Rect(110, 920, 160, 940))
         self.assertEqual(items[0][1], "30/30")
+
+    def test_writes_normalized_tags_to_markdown(self) -> None:
+        tags = normalize_tags(
+            (
+                {"name": "突破", "color": "#EF4444"},
+                {"name": "低吸", "color": "not-a-color"},
+            )
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with patch("kline_recorder.crop_result_card", return_value=Image.new("RGB", (40, 20), "black")):
+                note_path = write_obsidian_note(
+                    Path(temp_dir),
+                    "images",
+                    Image.new("RGB", (80, 60), "black"),
+                    Image.new("RGB", (80, 60), "black"),
+                    {"stock": "测试股份", "code": "002758", "profit": "2.11%", "date_range": "20251212 - 20260403"},
+                    {},
+                    tags=tags,
+                )
+            text = note_path.read_text(encoding="utf-8")
+        self.assertIn("- 标签：突破, 低吸", text)
+        self.assertIn('- 标签颜色：{"突破":"#ef4444","低吸":"#6b7280"}', text)
 
 
 if __name__ == "__main__":

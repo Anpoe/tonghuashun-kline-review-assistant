@@ -2,6 +2,7 @@ const state = {
   records: [],
   range: "all",
   outcome: "all",
+  tag: "all",
   search: "",
   view: "overview",
   generatedAt: "",
@@ -38,10 +39,14 @@ function filteredRecords(includeOutcome = true) {
   return state.records.filter((record) => {
     const inRange = days === Infinity || now - new Date(record.recordedAt).getTime() <= days * 86400000;
     const needle = state.search.trim().toLowerCase();
-    const matchesSearch = !needle || record.stock.toLowerCase().includes(needle) || record.code.includes(needle);
+    const matchesSearch = !needle
+      || record.stock.toLowerCase().includes(needle)
+      || record.code.includes(needle)
+      || (record.tags || []).some((tag) => tag.name.toLowerCase().includes(needle));
     const result = profitClass(record.profit);
     const matchesOutcome = !includeOutcome || state.outcome === "all" || result === state.outcome;
-    return inRange && matchesSearch && matchesOutcome;
+    const matchesTag = state.tag === "all" || (record.tags || []).some((tag) => tag.name === state.tag);
+    return inRange && matchesSearch && matchesOutcome && matchesTag;
   });
 }
 
@@ -176,7 +181,7 @@ function recordRow(record, recent = false) {
     const button = document.createElement("button");
     button.className = "recent-row";
     button.innerHTML = `
-      <span class="stock-cell"><strong>${escapeHtml(record.stock)}</strong><span>${escapeHtml(record.code || "无代码")}</span></span>
+      <span class="stock-cell"><strong>${escapeHtml(record.stock)}</strong><span>${escapeHtml(record.code || "无代码")}</span>${tagMarkup(record.tags)}</span>
       <span class="date-cell"><strong>${dateText(record.recordedAt)}</strong><span>${rangeText(record)}</span></span>
       <span class="profit ${resultClass}">${profitText(record.profit)}</span>
       <span class="row-arrow">›</span>`;
@@ -187,7 +192,7 @@ function recordRow(record, recent = false) {
   const row = document.createElement("tr");
   row.innerHTML = `
     <td>${dateText(record.recordedAt)}</td>
-    <td><span class="stock-cell"><strong>${escapeHtml(record.stock)}</strong><span>${escapeHtml(record.code || "无代码")}</span></span></td>
+    <td><span class="stock-cell"><strong>${escapeHtml(record.stock)}</strong><span>${escapeHtml(record.code || "无代码")}</span>${tagMarkup(record.tags)}</span></td>
     <td>${rangeText(record)}</td>
     <td class="numeric profit ${resultClass}">${profitText(record.profit)}</td>
     <td class="view-link">查看</td>`;
@@ -199,6 +204,23 @@ function escapeHtml(value) {
   const node = document.createElement("span");
   node.textContent = value;
   return node.innerHTML;
+}
+
+function tagMarkup(tags = []) {
+  if (!tags.length) return "";
+  return `<span class="tag-list">${tags.map((tag) => {
+    const color = /^#[0-9a-f]{6}$/i.test(tag.color) ? tag.color : "#6b7280";
+    return `<span class="tag-chip" style="--tag-color:${color}">${escapeHtml(tag.name)}</span>`;
+  }).join("")}</span>`;
+}
+
+function renderTagFilter() {
+  const select = $("#tagFilter");
+  const names = [...new Set(state.records.flatMap((record) => (record.tags || []).map((tag) => tag.name)))]
+    .sort((left, right) => left.localeCompare(right, "zh-CN"));
+  select.replaceChildren(new Option("全部标签", "all"), ...names.map((name) => new Option(name, name)));
+  if (state.tag !== "all" && !names.includes(state.tag)) state.tag = "all";
+  select.value = state.tag;
 }
 
 function renderRecords(records) {
@@ -214,6 +236,7 @@ function renderRecords(records) {
 }
 
 function render() {
+  renderTagFilter();
   const overviewRecords = filteredRecords(false);
   renderMetrics(overviewRecords);
   renderTrend(overviewRecords);
@@ -225,6 +248,7 @@ function openRecord(record) {
   $("#detailCode").textContent = record.code || "未识别代码";
   $("#detailTitle").textContent = record.stock;
   $("#detailMeta").textContent = `记录于 ${dateText(record.recordedAt)} · ${record.noteName}`;
+  $("#detailTags").innerHTML = tagMarkup(record.tags);
   $("#detailProfit").textContent = profitText(record.profit);
   $("#detailProfit").className = `profit ${profitClass(record.profit)}`;
   $("#detailRange").textContent = rangeText(record);
@@ -313,6 +337,7 @@ $$('[data-range]').forEach((button) => button.addEventListener("click", () => {
 }));
 $("#searchInput").addEventListener("input", (event) => { state.search = event.target.value; render(); });
 $("#outcomeFilter").addEventListener("change", (event) => { state.outcome = event.target.value; render(); });
+$("#tagFilter").addEventListener("change", (event) => { state.tag = event.target.value; render(); });
 $("#refreshButton").addEventListener("click", () => loadData(true));
 $("#deleteRecord").addEventListener("click", deleteSelectedRecord);
 $("#closeDialog").addEventListener("click", () => $("#recordDialog").close());
