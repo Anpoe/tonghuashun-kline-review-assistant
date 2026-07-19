@@ -23,6 +23,7 @@ from kline_recorder import (
     normalize_tags,
     ocr_item_rect,
     parse_metadata,
+    parse_result_metadata,
     requires_initial_setup,
     write_obsidian_note,
 )
@@ -37,6 +38,11 @@ class StubOcrReader(OcrReader):
 
     def read_items(self, _image: Image.Image) -> list[object]:
         return [[[[20, 40], [120, 40], [120, 80], [20, 80]], "30/30", 0.99]]
+
+
+class StubResultCardOcr(StubOcrReader):
+    def read_text(self, _image: Image.Image) -> str:
+        return "海辰药业\n300584\n20260401-20260717\n股票区间涨幅 -4.28%"
 
 
 class RecorderDetectionTests(unittest.TestCase):
@@ -94,6 +100,26 @@ class RecorderDetectionTests(unittest.TestCase):
 
     def test_metadata_accepts_long_dash_date_range(self) -> None:
         metadata = parse_metadata("海辰药业 300584\n20260401—20260717\n本局收益 1.65%")
+        self.assertEqual(metadata["date_range"], "20260401 - 20260717")
+
+    def test_result_metadata_recovers_missing_fields_from_result_card(self) -> None:
+        result_image = Image.new("RGB", (656, 1348), "black")
+        config = {"capture": {}}
+        with patch(
+            "kline_recorder.crop_result_card",
+            return_value=Image.new("RGB", (606, 198), "black"),
+        ) as crop:
+            metadata = parse_result_metadata(
+                "本局收益 1.65%",
+                result_image,
+                [],
+                config,
+                StubResultCardOcr(),
+            )
+        crop.assert_called_once_with(result_image, config, [])
+        self.assertEqual(metadata["stock"], "海辰药业")
+        self.assertEqual(metadata["code"], "300584")
+        self.assertEqual(metadata["profit"], "1.65%")
         self.assertEqual(metadata["date_range"], "20260401 - 20260717")
 
     def test_chart_requires_all_three_moving_average_lines(self) -> None:

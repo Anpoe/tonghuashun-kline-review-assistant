@@ -1046,6 +1046,29 @@ def parse_metadata(text: str) -> dict[str, str]:
     }
 
 
+def parse_result_metadata(
+    result_text: str,
+    result_image: Image.Image,
+    result_items: list[object],
+    config: dict,
+    ocr: OcrReader,
+) -> dict[str, str]:
+    metadata = parse_metadata(result_text)
+    metadata_incomplete = (
+        metadata["stock"] == "\u672a\u77e5\u80a1\u7968"
+        or not metadata["code"]
+        or not metadata["date_range"]
+    )
+    if not metadata_incomplete:
+        return metadata
+
+    result_card = crop_result_card(result_image, config, result_items)
+    result_card_text = ocr.read_text(result_card)
+    if not result_card_text:
+        return metadata
+    return parse_metadata(f"{result_text}\n{result_card_text}")
+
+
 def safe_name(value: str) -> str:
     value = re.sub(r'[<>:"/\\|?*\r\n]+', "_", value)
     value = value.replace("%", "pct")
@@ -1417,17 +1440,7 @@ def main(
                 report_status("result", "已锁定结果页", detail)
                 print("[DONE] Result page detected. Writing review image...")
                 report_status("saving", "正在生成总结", "拼接截图并写入 Obsidian")
-                metadata = parse_metadata(result_text)
-                metadata_incomplete = (
-                    metadata["stock"] == "未知股票"
-                    or not metadata["code"]
-                    or not metadata["date_range"]
-                )
-                if metadata_incomplete:
-                    result_card = crop_result_card(result_image, result_items, config)
-                    result_card_text = ocr.read_text(result_card)
-                    if result_card_text:
-                        metadata = parse_metadata(f"{result_text}\n{result_card_text}")
+                metadata = parse_result_metadata(result_text, result_image, result_items, config, ocr)
                 try:
                     selected_tags = normalize_tags(tag_provider() if tag_provider is not None else ())
                 except Exception:
