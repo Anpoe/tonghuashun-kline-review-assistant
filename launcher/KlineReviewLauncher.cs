@@ -187,13 +187,18 @@ namespace KlineReviewAssistantLauncher
         private static async Task<bool> WaitForAssistantWindowAsync(TimeSpan timeout)
         {
             var deadline = DateTime.UtcNow + timeout;
+            var launcherProcessId = Process.GetCurrentProcess().Id;
             while (DateTime.UtcNow < deadline)
             {
                 foreach (var process in Process.GetProcesses())
                 {
                     try
                     {
-                        if (process.MainWindowTitle == "K线复盘助手")
+                        var title = process.MainWindowTitle;
+                        if (
+                            process.Id != launcherProcessId &&
+                            (title == "K线复盘助手" || title.EndsWith(" - K线复盘助手"))
+                        )
                         {
                             return true;
                         }

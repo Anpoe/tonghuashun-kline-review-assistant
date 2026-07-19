@@ -13,9 +13,6 @@ import win32process
 
 from kline_recorder import (
     BUNDLED_CONFIG_PATH,
-    IS_FROZEN,
-    SOURCE_CONFIG_PATH,
-    USER_CONFIG_PATH,
     load_config,
     save_runtime_config,
 )
@@ -186,13 +183,10 @@ def default_output_dir() -> Path:
 
 
 def _base_config() -> dict:
-    if USER_CONFIG_PATH.is_file():
-        try:
-            return load_config(USER_CONFIG_PATH)
-        except Exception:
-            pass
-    template = BUNDLED_CONFIG_PATH if IS_FROZEN else SOURCE_CONFIG_PATH
-    return load_config(template)
+    try:
+        return load_config()
+    except Exception:
+        return load_config(BUNDLED_CONFIG_PATH)
 
 
 class SettingsDialog:

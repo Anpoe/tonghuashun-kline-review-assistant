@@ -124,7 +124,9 @@ def enable_dpi_awareness() -> None:
 def active_config_path() -> Path:
     if IS_FROZEN:
         return USER_CONFIG_PATH if USER_CONFIG_PATH.is_file() else BUNDLED_CONFIG_PATH
-    return SOURCE_CONFIG_PATH
+    if SOURCE_CONFIG_PATH.is_file():
+        return SOURCE_CONFIG_PATH
+    return USER_CONFIG_PATH if USER_CONFIG_PATH.is_file() else BUNDLED_CONFIG_PATH
 
 
 def load_config(path: Path | None = None) -> dict:
@@ -134,7 +136,7 @@ def load_config(path: Path | None = None) -> dict:
 
     # User settings survive upgrades. New options from the bundled template are
     # filled in without overwriting values the user already chose.
-    if IS_FROZEN and config_path == USER_CONFIG_PATH and BUNDLED_CONFIG_PATH.is_file():
+    if config_path != BUNDLED_CONFIG_PATH and BUNDLED_CONFIG_PATH.is_file():
         with BUNDLED_CONFIG_PATH.open("r", encoding="utf-8") as f:
             defaults = yaml.safe_load(f) or {}
         loaded = merge_config(defaults, loaded)
@@ -163,7 +165,7 @@ def save_user_config(config: dict) -> Path:
 
 
 def save_runtime_config(config: dict) -> Path:
-    if IS_FROZEN:
+    if IS_FROZEN or not SOURCE_CONFIG_PATH.is_file():
         return save_user_config(config)
     SOURCE_CONFIG_PATH.write_text(
         yaml.safe_dump(config, allow_unicode=True, sort_keys=False),
@@ -183,12 +185,11 @@ def initialize_user_config() -> dict:
 
 
 def requires_initial_setup() -> bool:
-    if not IS_FROZEN:
-        return False
-    if not USER_CONFIG_PATH.is_file():
+    config_path = active_config_path()
+    if config_path == BUNDLED_CONFIG_PATH:
         return True
     try:
-        config = load_config(USER_CONFIG_PATH)
+        config = load_config(config_path)
     except Exception:
         return True
     output_dir = str(config.get("paths", {}).get("obsidian_dir", "")).strip()

@@ -10,10 +10,12 @@ from PIL import Image
 from kline_recorder import (
     OcrReader,
     Rect,
+    active_config_path,
     has_result_anchor,
     is_session_start,
     normalize_tags,
     ocr_item_rect,
+    requires_initial_setup,
     write_obsidian_note,
 )
 
@@ -55,6 +57,37 @@ class RecorderDetectionTests(unittest.TestCase):
         rect = ocr_item_rect(items[0])
         self.assertEqual(rect, Rect(110, 920, 160, 940))
         self.assertEqual(items[0][1], "30/30")
+
+    def test_fresh_source_checkout_uses_template_and_requires_setup(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            template = root / "config.default.yaml"
+            template.write_text("paths:\n  obsidian_dir: ''\n", encoding="utf-8")
+            with (
+                patch("kline_recorder.IS_FROZEN", False),
+                patch("kline_recorder.SOURCE_CONFIG_PATH", root / "config.yaml"),
+                patch("kline_recorder.USER_CONFIG_PATH", root / "user" / "config.yaml"),
+                patch("kline_recorder.BUNDLED_CONFIG_PATH", template),
+            ):
+                self.assertEqual(active_config_path(), template)
+                self.assertTrue(requires_initial_setup())
+
+    def test_source_checkout_reuses_existing_user_config(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            template = root / "config.default.yaml"
+            user_config = root / "user" / "config.yaml"
+            template.write_text("paths:\n  obsidian_dir: ''\n", encoding="utf-8")
+            user_config.parent.mkdir()
+            user_config.write_text("paths:\n  obsidian_dir: C:/Reviews\n", encoding="utf-8")
+            with (
+                patch("kline_recorder.IS_FROZEN", False),
+                patch("kline_recorder.SOURCE_CONFIG_PATH", root / "config.yaml"),
+                patch("kline_recorder.USER_CONFIG_PATH", user_config),
+                patch("kline_recorder.BUNDLED_CONFIG_PATH", template),
+            ):
+                self.assertEqual(active_config_path(), user_config)
+                self.assertFalse(requires_initial_setup())
 
     def test_writes_normalized_tags_to_markdown(self) -> None:
         tags = normalize_tags(
