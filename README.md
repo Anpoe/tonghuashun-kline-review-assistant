@@ -11,7 +11,9 @@
 - `KlineReviewAssistant-Setup-1.1.1.exe`：安装版，推荐普通用户使用。
 - `SHA256SUMS.txt`：发布文件校验值。
 
-仓库源码本身就是可直接运行的版本，因此不再重复发布 portable ZIP。下载或克隆仓库后双击 `start_recorder.bat` 即可；缺少运行依赖时脚本会自动创建项目内的 `.venv`。
+仓库源码本身就是可直接运行的版本，因此不再重复发布 portable ZIP。下载或克隆仓库后双击根目录的 `同花顺K线复盘助手.exe` 即可；它始终启动当前源码，首次运行会自动准备项目内的 `.venv`。仓库运行方式需要电脑已安装 Python 3.11 或更高版本；不希望安装 Python 的普通用户请使用 Releases 中的安装版。
+
+`start_recorder.bat` 保留为命令行备用入口。拉取代码更新后不需要重新生成或安装启动器，继续双击同一个 EXE 即可运行最新代码。
 
 程序尚未进行代码签名，因此 Windows SmartScreen 可能在首次运行时显示提醒。
 
@@ -62,13 +64,21 @@
 本地使用始终运行当前源码，修改完成后无需重新安装：
 
 ```powershell
-.\start_recorder.bat
+.\同花顺K线复盘助手.exe
 ```
+
+也可以使用命令行入口 `start_recorder.bat`。
 
 首次准备独立 Python 环境也可以手动运行：
 
 ```powershell
 .\setup_local.bat
+```
+
+重新生成仓库根目录的轻量启动 EXE：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\build_launcher.ps1
 ```
 
 生成 GitHub 安装包时再安装构建依赖：
