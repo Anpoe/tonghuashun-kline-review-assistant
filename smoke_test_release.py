@@ -87,6 +87,11 @@ def main() -> int:
         raise RuntimeError(f"Packaged OCR self-test failed with code {ocr_test.returncode}.")
     print("packaged-ocr=ok")
 
+    dashboard_test = subprocess.run([str(EXE), "--dashboard-self-test"], cwd=EXE.parent, timeout=15)
+    if dashboard_test.returncode != 0:
+        raise RuntimeError(f"Packaged dashboard self-test failed with code {dashboard_test.returncode}.")
+    print("packaged-dashboard=ok")
+
     if application_already_running():
         print("window-tests=skipped (another application instance is running)")
         return 0

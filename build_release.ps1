@@ -7,7 +7,7 @@ $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $root
 
-$version = "1.0.1"
+$version = "1.1.0"
 $releaseDir = Join-Path $root "release"
 $appDir = Join-Path $root "dist\KlineReviewAssistant"
 $portableName = "KlineReviewAssistant-$version-portable"

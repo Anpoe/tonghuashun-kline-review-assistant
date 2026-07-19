@@ -9,7 +9,7 @@ a = Analysis(
     ["kline_recorder_gui.py"],
     pathex=[],
     binaries=rapid_binaries,
-    datas=rapid_datas + [("config.default.yaml", ".")],
+    datas=rapid_datas + [("config.default.yaml", "."), ("webui", "webui")],
     hiddenimports=rapid_hidden + ["win32com.client", "pythoncom", "pywintypes"],
     hookspath=[],
     hooksconfig={},

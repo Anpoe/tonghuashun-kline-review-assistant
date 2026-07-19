@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>同花顺 K线训练表现</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true">K</span>
+        <div>
+          <strong>训练复盘</strong>
+          <span>同花顺 K线训练营</span>
+        </div>
+      </div>
+      <nav aria-label="页面导航">
+        <button class="nav-item active" data-target="overview">表现概览</button>
+        <button class="nav-item" data-target="history">历史记录</button>
+      </nav>
+      <div class="sidebar-status">
+        <span class="live-dot"></span>
+        <div>
+          <strong>本地数据</strong>
+          <span id="syncStatus">正在读取记录</span>
+        </div>
+      </div>
+    </aside>
+
+    <main>
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">个人训练档案</p>
+          <h1 id="pageTitle">表现概览</h1>
+        </div>
+        <div class="topbar-actions">
+          <label class="search-box">
+            <span class="sr-only">搜索股票</span>
+            <input id="searchInput" type="search" placeholder="搜索股票或代码" autocomplete="off">
+          </label>
+          <div class="range-control" aria-label="时间范围">
+            <button data-range="30">30天</button>
+            <button data-range="90">90天</button>
+            <button class="active" data-range="all">全部</button>
+          </div>
+          <button id="refreshButton" class="command-button">刷新</button>
+        </div>
+      </header>
+
+      <section id="overviewView" class="view active">
+        <div class="metric-strip" aria-label="训练指标">
+          <article>
+            <span>训练局数</span>
+            <strong id="metricTotal">0</strong>
+            <small id="metricPeriod">全部记录</small>
+          </article>
+          <article>
+            <span>平均收益</span>
+            <strong id="metricAverage">0.00%</strong>
+            <small>每局算术平均</small>
+          </article>
+          <article>
+            <span>胜率</span>
+            <strong id="metricWinRate">0.0%</strong>
+            <small id="metricWins">0 胜 / 0 负</small>
+          </article>
+          <article>
+            <span>最佳单局</span>
+            <strong id="metricBest">0.00%</strong>
+            <small id="metricBestStock">暂无记录</small>
+          </article>
+        </div>
+
+        <div class="analysis-grid">
+          <section class="panel trend-panel">
+            <div class="panel-heading">
+              <div>
+                <h2>收益表现</h2>
+                <p>按训练时间排列的单局收益与累计收益</p>
+              </div>
+              <div class="legend" aria-label="图例">
+                <span><i class="legend-bar"></i>单局</span>
+                <span><i class="legend-line"></i>累计</span>
+              </div>
+            </div>
+            <div id="trendChart" class="chart" role="img" aria-label="收益趋势图"></div>
+          </section>
+
+          <section class="panel outcome-panel">
+            <div class="panel-heading">
+              <div>
+                <h2>结果分布</h2>
+                <p>盈利、持平与亏损局数</p>
+              </div>
+            </div>
+            <div class="outcome-body">
+              <div id="outcomeChart" class="donut" aria-label="结果分布图">
+                <div><strong id="donutRate">0%</strong><span>胜率</span></div>
+              </div>
+              <dl class="outcome-list">
+                <div><dt><i class="positive"></i>盈利</dt><dd id="positiveCount">0</dd></div>
+                <div><dt><i class="flat"></i>持平</dt><dd id="flatCount">0</dd></div>
+                <div><dt><i class="negative"></i>亏损</dt><dd id="negativeCount">0</dd></div>
+              </dl>
+            </div>
+          </section>
+        </div>
+
+        <section class="panel recent-panel">
+          <div class="panel-heading">
+            <div>
+              <h2>最近训练</h2>
+              <p>最新完成的五局记录</p>
+            </div>
+            <button class="text-command" data-target="history">查看全部</button>
+          </div>
+          <div id="recentRecords" class="recent-list"></div>
+        </section>
+      </section>
+
+      <section id="historyView" class="view">
+        <section class="history-band">
+          <div>
+            <h2>全部训练记录</h2>
+            <p id="historyCount">共 0 条</p>
+          </div>
+          <select id="outcomeFilter" aria-label="筛选结果">
+            <option value="all">全部结果</option>
+            <option value="positive">仅盈利</option>
+            <option value="flat">仅持平</option>
+            <option value="negative">仅亏损</option>
+          </select>
+        </section>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>训练时间</th>
+                <th>股票</th>
+                <th>训练区间</th>
+                <th class="numeric">本局收益</th>
+                <th><span class="sr-only">查看</span></th>
+              </tr>
+            </thead>
+            <tbody id="historyTable"></tbody>
+          </table>
+          <div id="emptyState" class="empty-state" hidden>
+            <strong>没有符合条件的训练记录</strong>
+            <span>调整时间范围、结果筛选或搜索词</span>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <dialog id="recordDialog">
+    <div class="dialog-shell">
+      <header>
+        <div>
+          <span id="detailCode" class="stock-code"></span>
+          <h2 id="detailTitle">训练详情</h2>
+          <p id="detailMeta"></p>
+        </div>
+        <button id="closeDialog" class="icon-button" aria-label="关闭详情">×</button>
+      </header>
+      <div class="detail-metrics">
+        <div><span>本局收益</span><strong id="detailProfit">--</strong></div>
+        <div><span>训练区间</span><strong id="detailRange">--</strong></div>
+      </div>
+      <div class="image-section">
+        <h3>完整盘面</h3>
+        <img id="detailChart" alt="开始与结束盘面截图">
+      </div>
+      <div id="resultSection" class="image-section">
+        <h3>训练结果</h3>
+        <img id="detailResult" alt="训练结果卡片">
+      </div>
+    </div>
+  </dialog>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <script src="/app.js"></script>
+</body>
+</html>

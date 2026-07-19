@@ -5,11 +5,13 @@ import os
 import queue
 import subprocess
 import sys
+import tempfile
 import threading
 import tkinter as tk
 from datetime import datetime
 from pathlib import Path
 from tkinter import messagebox
+from urllib.request import urlopen
 
 import win32api
 import win32con
@@ -26,6 +28,7 @@ from kline_recorder import (
     requires_initial_setup,
 )
 from kline_settings import find_happ_executable, show_settings
+from kline_dashboard import DashboardServer
 
 
 PANEL_WIDTH = 318
@@ -86,6 +89,7 @@ class RecorderPanel:
         self.history: list[str] = []
         self.collapsed = False
         self.panel_topmost = False
+        self.dashboard = DashboardServer(self.obsidian_dir)
 
         self.root = tk.Tk()
         self.root.withdraw()
@@ -210,14 +214,28 @@ class RecorderPanel:
         footer.pack_propagate(False)
         tk.Button(
             footer,
-            text="打开笔记目录",
-            command=self.open_output_dir,
+            text="数据看板",
+            command=self.open_dashboard,
             bg=COLORS["surface"],
             fg=COLORS["text"],
             activebackground=COLORS["surface_alt"],
             activeforeground="#ffffff",
             bd=0,
-            padx=12,
+            padx=10,
+            pady=6,
+            font=("Microsoft YaHei UI", 8, "bold"),
+            cursor="hand2",
+        ).pack(side="left")
+        tk.Button(
+            footer,
+            text="笔记目录",
+            command=self.open_output_dir,
+            bg=COLORS["surface"],
+            fg=COLORS["muted"],
+            activebackground=COLORS["surface_alt"],
+            activeforeground="#ffffff",
+            bd=0,
+            padx=8,
             pady=6,
             font=("Microsoft YaHei UI", 8),
             cursor="hand2",
@@ -243,7 +261,7 @@ class RecorderPanel:
             fg=COLORS["muted"],
             font=("Microsoft YaHei UI", 8),
         )
-        self.attach_label.pack(side="right", padx=12)
+        self.attach_label.pack(side="right", padx=8)
 
         self.history_label = tk.Label(
             self.body,
@@ -398,6 +416,13 @@ class RecorderPanel:
         except Exception as exc:
             messagebox.showerror("无法打开目录", str(exc), parent=self.root)
 
+    def open_dashboard(self) -> None:
+        try:
+            self.dashboard.start(open_browser=True)
+            self.post_status("connected", "已打开数据看板", "浏览器正在读取本地复盘记录")
+        except Exception as exc:
+            messagebox.showerror("无法打开数据看板", str(exc), parent=self.root)
+
     def open_settings(self) -> None:
         if not show_settings(self.root, first_run=False):
             return
@@ -410,6 +435,7 @@ class RecorderPanel:
 
     def close(self) -> None:
         self.stop_event.set()
+        self.dashboard.stop()
         self.root.destroy()
 
     def run(self) -> None:
@@ -419,6 +445,18 @@ class RecorderPanel:
 def main() -> int:
     try:
         enable_dpi_awareness()
+        if "--dashboard-self-test" in sys.argv:
+            with tempfile.TemporaryDirectory(prefix="KlineDashboardTest-") as temp_dir:
+                dashboard = DashboardServer(Path(temp_dir))
+                url = dashboard.start(open_browser=False)
+                try:
+                    with urlopen(url, timeout=5) as response:
+                        index = response.read()
+                    with urlopen(url + "api/dashboard", timeout=5) as response:
+                        api = response.read()
+                    return 0 if b"<!doctype html>" in index and b'"total":0' in api else 12
+                finally:
+                    dashboard.stop()
         if "--self-test" in sys.argv:
             from PIL import Image
 

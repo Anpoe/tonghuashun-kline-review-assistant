@@ -8,8 +8,8 @@
 
 从 [GitHub Releases](https://github.com/Anpoe/tonghuashun-kline-review-assistant/releases/latest) 下载最新版：
 
-- `KlineReviewAssistant-Setup-1.0.1.exe`：安装版，推荐普通用户使用。
-- `KlineReviewAssistant-1.0.1-portable.zip`：便携版，解压后运行。
+- `KlineReviewAssistant-Setup-1.1.0.exe`：安装版，推荐普通用户使用。
+- `KlineReviewAssistant-1.1.0-portable.zip`：便携版，解压后运行。
 - `SHA256SUMS.txt`：发布文件校验值。
 
 程序尚未进行代码签名，因此 Windows SmartScreen 可能在首次运行时显示提醒。
@@ -21,6 +21,8 @@
 - 保存开始与结束两张盘面，并以间隔和重复区域提示进行拼接。
 - 保存 K 线、成交量、大单净量区域以及结果卡片。
 - 自动生成包含股票、代码、训练区间、收益率和图片的 Obsidian Markdown 笔记。
+- 内置本地数据看板，展示训练局数、平均收益、胜率、最佳单局和收益趋势。
+- 支持按时间、股票和结果筛选历史记录，并查看每局完整盘面与结果卡片。
 - 悬浮窗显示当前识别、截图和保存进度。
 - 支持窗口缩放、不同 DPI 和多显示器。
 
@@ -30,6 +32,8 @@
 2. 首次设置会自动寻找同花顺远航版；没有找到时请选择 `happ.exe`。
 3. 选择复盘笔记保存文件夹，可以是 Obsidian 仓库内的目录或普通文件夹。
 4. 点击“保存并开始”，然后打开“新K线训练营”进入 K 线训练。
+
+悬浮窗底部点击“数据看板”即可在浏览器中查看表现与历史。看板仅监听本机 `127.0.0.1`，不会上传复盘记录或图片。
 
 设置保存在 `%APPDATA%\KlineReviewAssistant\config.yaml`。升级或卸载程序不会删除复盘笔记，也不会覆盖已有设置。
 
