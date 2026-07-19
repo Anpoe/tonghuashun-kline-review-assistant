@@ -35,6 +35,12 @@ USER_CONFIG_PATH = USER_CONFIG_DIR / "config.yaml"
 
 StatusCallback = Callable[[str, str, str], None]
 
+DEFAULT_FOCUSED_OCR_REGIONS = {
+    "training_control_region": {"left": 0, "top": 1138, "right": 656, "bottom": 1348},
+    "quote_scan_region": {"left": 0, "top": 48, "right": 656, "bottom": 242},
+    "result_scan_region": {"left": 0, "top": 560, "right": 656, "bottom": 1120},
+}
+
 
 def emit_status(
     callback: StatusCallback | None,
@@ -818,6 +824,31 @@ class OcrReader:
             return []
         return list(result)
 
+    def read_region_items(self, image: Image.Image, rect: Rect, scale: float = 2.0) -> list[object]:
+        rect = rect.clamp(image.width, image.height)
+        if rect.width <= 0 or rect.height <= 0:
+            return []
+        crop = crop_relative(image, rect)
+        scale = max(1.0, float(scale))
+        if scale != 1.0:
+            crop = crop.resize(
+                (max(1, round(crop.width * scale)), max(1, round(crop.height * scale))),
+                Image.Resampling.LANCZOS,
+            )
+
+        remapped: list[object] = []
+        for item in self.read_items(crop):
+            if not isinstance(item, (list, tuple)) or len(item) < 2:
+                continue
+            try:
+                points = np.asarray(item[0], dtype=np.float32).reshape(-1, 2)
+            except (TypeError, ValueError):
+                continue
+            points[:, 0] = points[:, 0] / scale + rect.left
+            points[:, 1] = points[:, 1] / scale + rect.top
+            remapped.append([points.tolist(), *item[1:]])
+        return remapped
+
     @staticmethod
     def text_from_items(items: Iterable[object]) -> str:
         return "\n".join(
@@ -993,6 +1024,10 @@ def main(
     last_ocr_screenshot: Image.Image | None = None
     quote_ready_since: float | None = None
     result_ready_since: float | None = None
+    result_page_handled = False
+    recovery_start_frame: Image.Image | None = None
+    recovery_latest_frame: Image.Image | None = None
+    recovery_change_crop: Image.Image | None = None
     last_missing_window_log = 0.0
     last_state_log_at = 0.0
     last_window_log_at = 0.0
@@ -1027,11 +1062,45 @@ def main(
                 last_window_log_at = now
         screenshot = capture_window(hwnd, window_rect, config["window"])
         now = time.time()
+        training_page_detected = is_training_page(screenshot, config)
 
         if now - last_ocr_at >= ocr_seconds:
             last_ocr_at = now
             last_ocr_items = ocr.read_items(screenshot)
             last_text = ocr.text_from_items(last_ocr_items)
+
+            focused_scale = float(config.get("ocr", {}).get("focused_scale", 2.0))
+            focused_items: list[object] = []
+            if start_frame is None and recovery_start_frame is None and training_page_detected:
+                if not is_session_start(last_text, config):
+                    region_name = "training_control_region"
+                    region_cfg = config.get("capture", {}).get(region_name) or DEFAULT_FOCUSED_OCR_REGIONS.get(
+                        region_name
+                    )
+                    if region_cfg:
+                        region = rect_from_config_scaled(region_cfg, screenshot, config)
+                        focused_items.extend(ocr.read_region_items(screenshot, region, focused_scale))
+                        last_text = ocr.text_from_items([*last_ocr_items, *focused_items])
+                if not is_quote_ready(last_text, config):
+                    region_cfg = config.get("capture", {}).get(
+                        "quote_scan_region"
+                    ) or DEFAULT_FOCUSED_OCR_REGIONS["quote_scan_region"]
+                    region = rect_from_config_scaled(region_cfg, screenshot, config)
+                    focused_items.extend(ocr.read_region_items(screenshot, region, focused_scale))
+            if (
+                (start_frame is not None or recovery_start_frame is not None)
+                and not training_page_detected
+                and not has_result_anchor(last_text, result_anchor)
+            ):
+                result_region_cfg = config.get("capture", {}).get(
+                    "result_scan_region"
+                ) or DEFAULT_FOCUSED_OCR_REGIONS["result_scan_region"]
+                if result_region_cfg:
+                    result_region = rect_from_config_scaled(result_region_cfg, screenshot, config)
+                    focused_items.extend(ocr.read_region_items(screenshot, result_region, focused_scale))
+            if focused_items:
+                last_ocr_items.extend(focused_items)
+                last_text = ocr.text_from_items(last_ocr_items)
             last_ocr_screenshot = screenshot.copy()
 
         result_detected = is_result_page(last_text, result_anchor)
@@ -1047,6 +1116,10 @@ def main(
                 last_latest_change_crop = None
                 quote_ready_since = None
                 result_ready_since = None
+                result_page_handled = False
+                recovery_start_frame = None
+                recovery_latest_frame = None
+                recovery_change_crop = None
             elif now - last_state_log_at >= 5.0:
                 print("[WAIT] Home page detected. Waiting for a 30/30 training chart...")
                 emit_status(status_callback, "home", "当前在主菜单", "等待开始一局 K 线训练")
@@ -1054,10 +1127,35 @@ def main(
             time.sleep(poll_seconds)
             continue
 
+        if not result_detected:
+            result_ready_since = None
+            result_page_handled = False
+
         if result_detected:
-            if start_frame is not None and latest_frame is not None:
+            if result_page_handled:
+                time.sleep(poll_seconds)
+                continue
+            result_delay = max(1.0, float(config.get("session", {}).get("result_ready_delay_seconds", 1.0)))
+            if result_ready_since is None:
+                result_ready_since = now
+                emit_status(status_callback, "result", "已识别结果页", f"等待 {result_delay:.1f} 秒读取完整结果")
+                time.sleep(poll_seconds)
+                continue
+            if now - result_ready_since < result_delay:
+                time.sleep(poll_seconds)
+                continue
+            result_page_handled = True
+            recovered = start_frame is None or latest_frame is None
+            frames_ready = start_frame is not None and latest_frame is not None
+            if not frames_ready and recovery_start_frame is not None and recovery_latest_frame is not None:
+                start_frame = recovery_start_frame
+                latest_frame = recovery_latest_frame
+                frames_ready = True
+
+            if frames_ready:
                 result_image = last_ocr_screenshot if last_ocr_screenshot is not None else screenshot
-                emit_status(status_callback, "result", "已锁定结果页", "识别到股票区间涨幅")
+                detail = "30/30 曾漏检，正在使用暂存盘面补录" if recovered else "识别到股票区间涨幅"
+                emit_status(status_callback, "result", "已锁定结果页", detail)
                 print("[DONE] Result page detected. Writing review image...")
                 emit_status(status_callback, "saving", "正在生成总结", "拼接截图并写入 Obsidian")
                 metadata = parse_metadata(last_text)
@@ -1081,13 +1179,24 @@ def main(
                 last_latest_change_crop = None
                 quote_ready_since = None
                 result_ready_since = None
+                recovery_start_frame = None
+                recovery_latest_frame = None
+                recovery_change_crop = None
                 last_text = ""
                 last_ocr_items = []
                 last_ocr_screenshot = None
+            else:
+                print("[WARN] Result page detected, but no chart snapshots were available.")
+                emit_status(
+                    status_callback,
+                    "error",
+                    "结果页已出现，但没有可用盘面",
+                    "本局无法生成截图；下一局会继续自动记录",
+                )
             time.sleep(poll_seconds)
             continue
 
-        if not is_training_page(screenshot, config):
+        if not training_page_detected:
             time.sleep(poll_seconds)
             continue
 
@@ -1100,9 +1209,25 @@ def main(
             if not session_start_detected:
                 quote_ready_since = None
                 result_ready_since = None
+                if quote_ready_detected:
+                    if recovery_start_frame is None:
+                        recovery_start_frame = viewport.copy()
+                        recovery_latest_frame = viewport.copy()
+                        recovery_change_crop = change_crop.copy()
+                        print("[RECOVERY] Cached first visible chart in case 30/30 was missed.")
+                    else:
+                        recovery_change = (
+                            image_change_score(recovery_change_crop, change_crop)
+                            if recovery_change_crop is not None
+                            else 999.0
+                        )
+                        if recovery_change >= float(config["stitching"]["min_change_score"]):
+                            recovery_latest_frame = viewport.copy()
+                            recovery_change_crop = change_crop.copy()
                 if now - last_state_log_at >= 5.0:
                     print("[WAIT] Training window visible, but 30/30 has not been detected yet.")
-                    emit_status(status_callback, "training", "训练页面已打开", "等待出现结算 30/30")
+                    detail = "等待 30/30；已准备漏检补录" if recovery_start_frame is not None else "等待出现结算 30/30"
+                    emit_status(status_callback, "training", "训练页面已打开", detail)
                     last_state_log_at = now
                 time.sleep(poll_seconds)
                 continue
@@ -1128,6 +1253,9 @@ def main(
             start_frame = viewport
             latest_frame = viewport
             last_latest_change_crop = change_crop
+            recovery_start_frame = None
+            recovery_latest_frame = None
+            recovery_change_crop = None
             quote_ready_since = None
             print(f"[START] Captured initial 30/30 snapshot. Window={screenshot.width}x{screenshot.height}")
             emit_status(status_callback, "captured", "已截取开始盘面", "正在记录本局训练")

@@ -1,5 +1,6 @@
 param(
-    [switch]$SkipApplicationBuild
+    [switch]$SkipApplicationBuild,
+    [switch]$KeepBuildArtifacts
 )
 
 $ErrorActionPreference = "Stop"
@@ -7,14 +8,33 @@ $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $root
 
-$version = "1.1.0"
+$version = "1.1.1"
+$buildDir = Join-Path $root "build"
+$distDir = Join-Path $root "dist"
 $releaseDir = Join-Path $root "release"
-$appDir = Join-Path $root "dist\KlineReviewAssistant"
-$portableName = "KlineReviewAssistant-$version-portable"
-$portableStage = Join-Path $releaseDir $portableName
-$portableZip = Join-Path $releaseDir ($portableName + ".zip")
+$appDir = Join-Path $distDir "KlineReviewAssistant"
+$installerName = "KlineReviewAssistant-Setup-$version.exe"
+$installerPath = Join-Path $releaseDir $installerName
+
+function Assert-WorkspacePath([string]$Path) {
+    $resolvedRoot = [System.IO.Path]::GetFullPath($root).TrimEnd('\') + '\'
+    $resolvedPath = [System.IO.Path]::GetFullPath($Path)
+    if (-not $resolvedPath.StartsWith($resolvedRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "Refusing to clean a path outside the project: $resolvedPath"
+    }
+}
+
+foreach ($path in @($buildDir, $distDir, $releaseDir)) {
+    Assert-WorkspacePath $path
+}
 
 if (-not $SkipApplicationBuild) {
+    foreach ($path in @($buildDir, $distDir)) {
+        if (Test-Path -LiteralPath $path) {
+            Remove-Item -LiteralPath $path -Recurse -Force
+        }
+    }
+
     python build_icon.py
     if ($LASTEXITCODE -ne 0) { throw "Icon build failed." }
 
@@ -26,8 +46,6 @@ if (-not (Test-Path -LiteralPath $appDir -PathType Container)) {
     throw "Application output was not created: $appDir"
 }
 
-# Public builds must never contain the developer's personal application config.
-# OCR model packages have their own unrelated files with the same basename.
 $personalConfigs = @(
     (Join-Path $appDir "config.yaml"),
     (Join-Path $appDir "_internal\config.yaml")
@@ -35,19 +53,12 @@ $personalConfigs = @(
 if ($personalConfigs) {
     throw "Refusing to publish a build containing a personal application config: $($personalConfigs -join ', ')"
 }
+
 Copy-Item -LiteralPath (Join-Path $root "README.md") -Destination (Join-Path $appDir "README.md") -Force
 Copy-Item -LiteralPath (Join-Path $root "QUICKSTART.txt") -Destination (Join-Path $appDir "QUICKSTART.txt") -Force
 
-New-Item -ItemType Directory -Path $releaseDir -Force | Out-Null
-if (Test-Path -LiteralPath $portableStage) {
-    Remove-Item -LiteralPath $portableStage -Recurse -Force
-}
-if (Test-Path -LiteralPath $portableZip) {
-    Remove-Item -LiteralPath $portableZip -Force
-}
-Copy-Item -LiteralPath $appDir -Destination $portableStage -Recurse
-Compress-Archive -LiteralPath $portableStage -DestinationPath $portableZip -CompressionLevel Optimal
-Remove-Item -LiteralPath $portableStage -Recurse -Force
+python smoke_test_release.py
+if ($LASTEXITCODE -ne 0) { throw "Release smoke test failed." }
 
 $isccCandidates = @(
     "$env:ProgramFiles(x86)\Inno Setup 6\ISCC.exe",
@@ -55,22 +66,33 @@ $isccCandidates = @(
     "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe"
 )
 $iscc = $isccCandidates | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
-if ($iscc) {
-    $issPath = Join-Path $root "installer.iss"
-    $issText = [System.IO.File]::ReadAllText($issPath, [System.Text.Encoding]::UTF8)
-    [System.IO.File]::WriteAllText($issPath, $issText, [System.Text.UTF8Encoding]::new($true))
-    & $iscc $issPath
-    if ($LASTEXITCODE -ne 0) { throw "Installer build failed." }
-} else {
-    Write-Warning "Inno Setup 6 was not found. Portable ZIP was created; installer was skipped."
+if (-not $iscc) {
+    throw "Inno Setup 6 was not found. It is required to create the GitHub installer."
 }
 
-$artifacts = Get-ChildItem -LiteralPath $releaseDir -File |
-    Where-Object { $_.Name -like "KlineReviewAssistant-$version-*" -or $_.Name -eq "KlineReviewAssistant-Setup-$version.exe" }
-$checksums = foreach ($artifact in $artifacts) {
-    $hash = Get-FileHash -LiteralPath $artifact.FullName -Algorithm SHA256
-    "$($hash.Hash)  $($artifact.Name)"
+if (Test-Path -LiteralPath $releaseDir) {
+    Remove-Item -LiteralPath $releaseDir -Recurse -Force
 }
-$checksums | Set-Content -LiteralPath (Join-Path $releaseDir "SHA256SUMS.txt") -Encoding ascii
+New-Item -ItemType Directory -Path $releaseDir | Out-Null
+
+$issPath = Join-Path $root "installer.iss"
+$issText = [System.IO.File]::ReadAllText($issPath, [System.Text.Encoding]::UTF8)
+[System.IO.File]::WriteAllText($issPath, $issText, [System.Text.UTF8Encoding]::new($true))
+& $iscc $issPath
+if ($LASTEXITCODE -ne 0) { throw "Installer build failed." }
+if (-not (Test-Path -LiteralPath $installerPath -PathType Leaf)) {
+    throw "Installer output was not created: $installerPath"
+}
+
+$hash = Get-FileHash -LiteralPath $installerPath -Algorithm SHA256
+"$($hash.Hash)  $installerName" | Set-Content -LiteralPath (Join-Path $releaseDir "SHA256SUMS.txt") -Encoding ascii
 
 Get-ChildItem -LiteralPath $releaseDir -File | Select-Object Name, Length, LastWriteTime
+
+if (-not $KeepBuildArtifacts) {
+    foreach ($path in @($buildDir, $distDir)) {
+        if (Test-Path -LiteralPath $path) {
+            Remove-Item -LiteralPath $path -Recurse -Force
+        }
+    }
+}

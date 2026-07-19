@@ -1,5 +1,5 @@
 app:
-  version: "1.1.0"
+  version: "1.1.1"
 
 window:
   title_contains:
@@ -38,6 +38,16 @@ capture:
     top: 1138
     right: 656
     bottom: 1348
+  quote_scan_region:
+    left: 0
+    top: 48
+    right: 656
+    bottom: 242
+  result_scan_region:
+    left: 0
+    top: 560
+    right: 656
+    bottom: 1120
   result_crop_region:
     left: 32
     top: 730
@@ -52,7 +62,7 @@ session:
     - "30/30"
     - "3030"
   quote_ready_delay_seconds: 1.5
-  result_ready_delay_seconds: 0.0
+  result_ready_delay_seconds: 1.0
   quote_keywords:
     - "开"
     - "高"
@@ -89,6 +99,7 @@ stitching:
 
 ocr:
   enabled: true
+  focused_scale: 2.0
   result_anchor_keyword: "股票区间涨幅"
   result_keywords:
     - "再来一局"

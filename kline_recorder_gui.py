@@ -73,8 +73,11 @@ def acquire_single_instance() -> bool:
 
     existing = win32gui.FindWindow(None, "K线复盘助手")
     if existing:
-        win32gui.ShowWindow(existing, win32con.SW_RESTORE)
-        win32gui.SetForegroundWindow(existing)
+        try:
+            win32gui.ShowWindow(existing, win32con.SW_RESTORE)
+            win32gui.SetForegroundWindow(existing)
+        except win32gui.error:
+            pass
     return False
 
 

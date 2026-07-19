@@ -8,9 +8,10 @@
 
 从 [GitHub Releases](https://github.com/Anpoe/tonghuashun-kline-review-assistant/releases/latest) 下载最新版：
 
-- `KlineReviewAssistant-Setup-1.1.0.exe`：安装版，推荐普通用户使用。
-- `KlineReviewAssistant-1.1.0-portable.zip`：便携版，解压后运行。
+- `KlineReviewAssistant-Setup-1.1.1.exe`：安装版，推荐普通用户使用。
 - `SHA256SUMS.txt`：发布文件校验值。
+
+仓库源码本身就是可直接运行的版本，因此不再重复发布 portable ZIP。下载或克隆仓库后双击 `start_recorder.bat` 即可；缺少运行依赖时脚本会自动创建项目内的 `.venv`。
 
 程序尚未进行代码签名，因此 Windows SmartScreen 可能在首次运行时显示提醒。
 
@@ -54,22 +55,36 @@
 
 ## 本地构建
 
+本地使用始终运行当前源码，修改完成后无需重新安装：
+
 ```powershell
-python -m pip install -r requirements.txt
+.\start_recorder.bat
+```
+
+首次准备独立 Python 环境也可以手动运行：
+
+```powershell
+.\setup_local.bat
+```
+
+生成 GitHub 安装包时再安装构建依赖：
+
+```powershell
+python -m pip install -r requirements-dev.txt
 powershell -NoProfile -ExecutionPolicy Bypass -File .\build_release.ps1
 ```
 
-构建结果位于 `release`。安装器需要 Inno Setup 6；没有安装时仍会生成便携版 ZIP。
+构建结果位于 `release`，只包含安装程序和 `SHA256SUMS.txt`。安装器需要 Inno Setup 6；构建完成后默认删除 `build` 和 `dist` 中间目录，传入 `-KeepBuildArtifacts` 可以保留它们用于调试。
 
 发布构建只打包通用的 `config.default.yaml`，不会打包开发者本机的 `config.yaml`。
 
 ## 自检
 
 ```powershell
-python smoke_test_release.py
+python -m unittest test_dashboard.py test_recorder_detection.py
 ```
 
-自检会验证打包后的 OCR、首次设置窗口以及正常悬浮窗，不会修改当前用户配置。
+发布脚本还会自动运行 `smoke_test_release.py`，验证打包后的 OCR、数据看板、首次设置窗口和正常悬浮窗，不会修改当前用户配置。
 
 ## License
 
