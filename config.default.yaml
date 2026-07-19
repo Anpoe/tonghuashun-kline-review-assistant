@@ -73,6 +73,7 @@ capture:
   training_orange_pixels: 1200
   training_blue_pixels: 1200
   training_center_ring_pixels: 80
+  home_orange_pixels: 80000
 
 session:
   require_start_30_30: true

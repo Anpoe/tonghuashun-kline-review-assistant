@@ -16,11 +16,13 @@ from kline_recorder import (
     chart_paint_change_ratio,
     has_training_controls,
     has_result_anchor,
+    is_home_page_visual,
     is_training_page,
     is_session_start,
     moving_average_lines_loaded,
     normalize_tags,
     ocr_item_rect,
+    parse_metadata,
     requires_initial_setup,
     write_obsidian_note,
 )
@@ -77,6 +79,22 @@ class RecorderDetectionTests(unittest.TestCase):
             for y in range(1200, 1220):
                 image.putpixel((x, y), (255, 0, 80))
         self.assertTrue(is_training_page(image, config))
+
+    def test_home_page_visual_uses_dense_orange_layout(self) -> None:
+        config = {
+            "capture": {"home_orange_pixels": 80000},
+            "window": {"preferred_width": 656, "preferred_height": 1348},
+        }
+        image = Image.new("RGB", (656, 1348), "black")
+        draw = ImageDraw.Draw(image)
+        draw.rectangle((0, 0, 199, 199), fill=(255, 120, 0))
+        self.assertFalse(is_home_page_visual(image, config))
+        draw.rectangle((0, 200, 399, 399), fill=(255, 120, 0))
+        self.assertTrue(is_home_page_visual(image, config))
+
+    def test_metadata_accepts_long_dash_date_range(self) -> None:
+        metadata = parse_metadata("海辰药业 300584\n20260401—20260717\n本局收益 1.65%")
+        self.assertEqual(metadata["date_range"], "20260401 - 20260717")
 
     def test_chart_requires_all_three_moving_average_lines(self) -> None:
         image = Image.new("RGB", (652, 415), (18, 18, 38))

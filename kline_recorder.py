@@ -982,6 +982,16 @@ def is_home_page(text: str, keywords: Iterable[str]) -> bool:
     return bool(text) and sum(1 for keyword in keywords if keyword in text) >= 2
 
 
+def is_home_page_visual(screenshot: Image.Image, config: dict) -> bool:
+    capture_cfg = config.get("capture", {})
+    orange_count = color_pixel_count(screenshot, (0, 80, 120), (28, 255, 255))
+    preferred_width = max(1, int(config.get("window", {}).get("preferred_width", 656)))
+    preferred_height = max(1, int(config.get("window", {}).get("preferred_height", 1348)))
+    area_scale = screenshot.width * screenshot.height / (preferred_width * preferred_height)
+    threshold = float(capture_cfg.get("home_orange_pixels", 80000)) * area_scale
+    return orange_count >= threshold
+
+
 def parse_metadata(text: str) -> dict[str, str]:
     lines = [line.strip() for line in text.splitlines() if line.strip()]
     compact = re.sub(r"\s+", " ", text)
@@ -1023,7 +1033,7 @@ def parse_metadata(text: str) -> dict[str, str]:
                     break
 
     date_range = ""
-    date_match = re.search(r"(\d{8})\s*[-_ ]?\s*(\d{8})", compact)
+    date_match = re.search(r"(\d{8})\D{0,16}(\d{8})", compact)
     if date_match:
         date_range = f"{date_match.group(1)} - {date_match.group(2)}"
 
@@ -1215,6 +1225,7 @@ def main(
         screenshot = capture_window(hwnd, window_rect, config["window"])
         now = time.time()
         training_page_detected = is_training_page(screenshot, config)
+        visual_home_detected = not training_page_detected and is_home_page_visual(screenshot, config)
         has_snapshots = (
             start_frame is not None
             or recovery_start_frame is not None
@@ -1247,7 +1258,7 @@ def main(
                 result_detected = False
                 home_detected = False
                 training_controls_detected = False
-            if not has_snapshots and not result_page_handled:
+            if visual_home_detected or (not has_snapshots and not result_page_handled):
                 home_detected = True
 
         if pending_result_image is None and now - last_ocr_at >= ocr_seconds:
@@ -1407,6 +1418,16 @@ def main(
                 print("[DONE] Result page detected. Writing review image...")
                 report_status("saving", "正在生成总结", "拼接截图并写入 Obsidian")
                 metadata = parse_metadata(result_text)
+                metadata_incomplete = (
+                    metadata["stock"] == "未知股票"
+                    or not metadata["code"]
+                    or not metadata["date_range"]
+                )
+                if metadata_incomplete:
+                    result_card = crop_result_card(result_image, result_items, config)
+                    result_card_text = ocr.read_text(result_card)
+                    if result_card_text:
+                        metadata = parse_metadata(f"{result_text}\n{result_card_text}")
                 try:
                     selected_tags = normalize_tags(tag_provider() if tag_provider is not None else ())
                 except Exception:
