@@ -14,9 +14,12 @@ from kline_recorder import (
     active_config_path,
     capture_window,
     chart_paint_change_ratio,
+    find_duplicate_note,
     has_training_controls,
     has_result_anchor,
+    image_pixel_change_ratio,
     is_home_page_visual,
+    is_result_page_visual_ready,
     is_training_page,
     is_session_start,
     moving_average_lines_loaded,
@@ -98,9 +101,38 @@ class RecorderDetectionTests(unittest.TestCase):
         draw.rectangle((0, 200, 399, 399), fill=(255, 120, 0))
         self.assertTrue(is_home_page_visual(image, config))
 
+    def test_result_page_waits_for_final_blue_action_button(self) -> None:
+        config = {
+            "capture": {
+                "result_final_controls_region": {"left": 60, "top": 430, "right": 596, "bottom": 700},
+                "result_final_blue_pixels": 20000,
+            },
+            "window": {"preferred_width": 656, "preferred_height": 1348},
+        }
+        image = Image.new("RGB", (656, 1348), "black")
+        ImageDraw.Draw(image).rectangle((100, 540, 555, 590), fill=(45, 110, 235))
+        self.assertTrue(is_result_page_visual_ready(image, config))
+
+        image = Image.new("RGB", (656, 1348), "black")
+        ImageDraw.Draw(image).rectangle((100, 540, 180, 590), fill=(45, 110, 235))
+        self.assertFalse(is_result_page_visual_ready(image, config))
+
+    def test_result_frame_change_ratio_detects_stability(self) -> None:
+        previous = Image.new("RGB", (100, 100), "black")
+        current = previous.copy()
+        self.assertEqual(image_pixel_change_ratio(previous, current), 0.0)
+        ImageDraw.Draw(current).rectangle((0, 0, 49, 49), fill="white")
+        self.assertGreater(image_pixel_change_ratio(previous, current), 20.0)
+
     def test_metadata_accepts_long_dash_date_range(self) -> None:
         metadata = parse_metadata("海辰药业 300584\n20260401—20260717\n本局收益 1.65%")
         self.assertEqual(metadata["date_range"], "20260401 - 20260717")
+
+    def test_metadata_ignores_stray_ocr_character_between_dates(self) -> None:
+        metadata = parse_metadata(
+            "康拓医疗\n688314\n股票区间涨幅 -16.35%\n20260306\n5.20260623"
+        )
+        self.assertEqual(metadata["date_range"], "20260306 - 20260623")
 
     def test_result_metadata_recovers_missing_fields_from_result_card(self) -> None:
         result_image = Image.new("RGB", (656, 1348), "black")
@@ -235,6 +267,27 @@ class RecorderDetectionTests(unittest.TestCase):
             text = note_path.read_text(encoding="utf-8")
         self.assertIn("- 标签：突破, 低吸", text)
         self.assertIn('- 标签颜色：{"突破":"#ef4444","低吸":"#6b7280"}', text)
+
+
+    def test_duplicate_note_matches_recent_training_identity(self) -> None:
+        metadata = {
+            "stock": "康拓医疗",
+            "code": "688314",
+            "profit": "7.58%",
+            "date_range": "20260306 - 20260623",
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            note_path = root / "2026-07-19 康拓医疗 7.58pct.md"
+            note_path.write_text(
+                "# 康拓医疗 7.58%\n\n"
+                "- 股票：康拓医疗 688314\n"
+                "- 训练区间：20260306 - 20260623\n"
+                "- 本局收益：7.58%\n",
+                encoding="utf-8",
+            )
+            duplicate = find_duplicate_note(root, Image.new("RGB", (20, 20), "black"), metadata)
+        self.assertEqual(duplicate, note_path)
 
 
 if __name__ == "__main__":

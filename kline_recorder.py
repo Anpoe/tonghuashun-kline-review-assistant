@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ctypes
+import hashlib
 import json
 import os
 import re
@@ -585,6 +586,17 @@ def image_change_score(a: Image.Image, b: Image.Image) -> float:
     return float(np.asarray(diff, dtype=np.float32).mean())
 
 
+def image_pixel_change_ratio(previous: Image.Image, current: Image.Image) -> float:
+    if previous.size != current.size:
+        return 100.0
+    previous_array = np.asarray(previous.convert("RGB"), dtype=np.int16)
+    current_array = np.asarray(current.convert("RGB"), dtype=np.int16)
+    if previous_array.size == 0:
+        return 100.0
+    changed = np.max(np.abs(previous_array - current_array), axis=2) >= 12
+    return float(np.count_nonzero(changed) * 100.0 / changed.size)
+
+
 def color_pixel_count(image: Image.Image, lower: tuple[int, int, int], upper: tuple[int, int, int]) -> int:
     hsv = cv2.cvtColor(np.asarray(image), cv2.COLOR_RGB2HSV)
     mask = cv2.inRange(hsv, np.array(lower, dtype=np.uint8), np.array(upper, dtype=np.uint8))
@@ -992,6 +1004,21 @@ def is_home_page_visual(screenshot: Image.Image, config: dict) -> bool:
     return orange_count >= threshold
 
 
+def is_result_page_visual_ready(screenshot: Image.Image, config: dict) -> bool:
+    capture_cfg = config.get("capture", {})
+    region_cfg = capture_cfg.get(
+        "result_final_controls_region",
+        {"left": 60, "top": 430, "right": 596, "bottom": 700},
+    )
+    region = crop_relative(screenshot, rect_from_config_scaled(region_cfg, screenshot, config))
+    blue_count = color_pixel_count(region, (95, 70, 100), (125, 255, 255))
+    preferred_width = max(1, int(config.get("window", {}).get("preferred_width", 656)))
+    preferred_height = max(1, int(config.get("window", {}).get("preferred_height", 1348)))
+    area_scale = screenshot.width * screenshot.height / (preferred_width * preferred_height)
+    threshold = float(capture_cfg.get("result_final_blue_pixels", 20000)) * area_scale
+    return blue_count >= threshold
+
+
 def parse_metadata(text: str) -> dict[str, str]:
     lines = [line.strip() for line in text.splitlines() if line.strip()]
     compact = re.sub(r"\s+", " ", text)
@@ -1036,6 +1063,10 @@ def parse_metadata(text: str) -> dict[str, str]:
     date_match = re.search(r"(\d{8})\D{0,16}(\d{8})", compact)
     if date_match:
         date_range = f"{date_match.group(1)} - {date_match.group(2)}"
+    else:
+        date_values = re.findall(r"(?<!\d)(20\d{6})(?!\d)", compact)
+        if len(date_values) >= 2:
+            date_range = f"{date_values[0]} - {date_values[1]}"
 
     return {
         "stock": stock or "\u672a\u77e5\u80a1\u7968",
@@ -1073,6 +1104,81 @@ def safe_name(value: str) -> str:
     value = re.sub(r'[<>:"/\\|?*\r\n]+', "_", value)
     value = value.replace("%", "pct")
     return value.strip(" ._") or "kline-review"
+
+
+def image_content_digest(image: Image.Image) -> str:
+    normalized = image.convert("RGB")
+    digest = hashlib.sha256()
+    digest.update(f"{normalized.width}x{normalized.height}".encode("ascii"))
+    digest.update(normalized.tobytes())
+    return digest.hexdigest()
+
+
+def note_identity(metadata: dict[str, str]) -> tuple[str, str, str]:
+    stock_key = metadata.get("code", "").strip() or metadata.get("stock", "").strip()
+    date_key = "".join(re.findall(r"\d", metadata.get("date_range", "")))
+    profit_match = re.search(r"[+-]?\d+(?:\.\d+)?%", metadata.get("profit", ""))
+    profit_key = profit_match.group(0) if profit_match else metadata.get("profit", "").strip()
+    return stock_key, date_key, profit_key
+
+
+def note_identity_from_text(note_text: str) -> tuple[str, str, str]:
+    stock_line = re.search(r"^-\s*股票[：:]\s*(.+)$", note_text, re.MULTILINE)
+    interval_line = re.search(r"^-\s*训练区间[：:]\s*(.+)$", note_text, re.MULTILINE)
+    profit_line = re.search(r"^-\s*本局收益[：:]\s*(.+)$", note_text, re.MULTILINE)
+    stock_value = stock_line.group(1).strip() if stock_line else ""
+    code_match = re.search(r"\b\d{6}\b", stock_value)
+    return note_identity(
+        {
+            "stock": re.sub(r"\s*\d{6}\s*$", "", stock_value).strip(),
+            "code": code_match.group(0) if code_match else "",
+            "date_range": interval_line.group(1).strip() if interval_line else "",
+            "profit": profit_line.group(1).strip() if profit_line else "",
+        }
+    )
+
+
+def find_duplicate_note(
+    obsidian_dir: Path,
+    stitched: Image.Image,
+    metadata: dict[str, str] | None = None,
+    now: datetime | None = None,
+) -> Path | None:
+    if not obsidian_dir.is_dir():
+        return None
+    current_time = now or datetime.now()
+    expected_identity = note_identity(metadata or {})
+    expected_digest = image_content_digest(stitched)
+    image_pattern = re.compile(r"!\[\[([^\]]+\.png)\]\]", re.IGNORECASE)
+    note_paths = sorted(
+        obsidian_dir.glob("*.md"),
+        key=lambda path: path.stat().st_mtime if path.exists() else 0.0,
+        reverse=True,
+    )
+    for note_path in note_paths:
+        try:
+            note_text = note_path.read_text(encoding="utf-8-sig")
+        except (OSError, UnicodeError):
+            continue
+        if all(expected_identity) and note_identity_from_text(note_text) == expected_identity:
+            try:
+                note_age = abs(current_time.timestamp() - note_path.stat().st_mtime)
+            except OSError:
+                note_age = float("inf")
+            if note_age <= 600:
+                return note_path
+        image_match = image_pattern.search(note_text)
+        if image_match is None:
+            continue
+        image_path = (obsidian_dir / image_match.group(1).replace("/", os.sep)).resolve()
+        try:
+            image_path.relative_to(obsidian_dir.resolve())
+            with Image.open(image_path) as existing_image:
+                if image_content_digest(existing_image) == expected_digest:
+                    return note_path
+        except (OSError, ValueError):
+            continue
+    return None
 
 
 def write_obsidian_note(
@@ -1198,6 +1304,8 @@ def main(
     start_chart_previous: Image.Image | None = None
     start_chart_stable_since: float | None = None
     result_ready_since: float | None = None
+    result_previous_frame: Image.Image | None = None
+    result_stable_since: float | None = None
     result_page_handled = False
     pending_result_image: Image.Image | None = None
     pending_result_items: list[object] = []
@@ -1249,6 +1357,9 @@ def main(
         now = time.time()
         training_page_detected = is_training_page(screenshot, config)
         visual_home_detected = not training_page_detected and is_home_page_visual(screenshot, config)
+        result_visual_ready_detected = (
+            not training_page_detected and is_result_page_visual_ready(screenshot, config)
+        )
         has_snapshots = (
             start_frame is not None
             or recovery_start_frame is not None
@@ -1267,6 +1378,9 @@ def main(
             nontraining_since = None
             result_detected = False
             home_detected = False
+            result_ready_since = None
+            result_previous_frame = None
+            result_stable_since = None
             if start_frame is not None:
                 session_start_detected = True
                 quote_ready_detected = True
@@ -1281,6 +1395,9 @@ def main(
                 result_detected = False
                 home_detected = False
                 training_controls_detected = False
+            if result_visual_ready_detected and has_snapshots:
+                result_detected = True
+                home_detected = False
             if visual_home_detected or (not has_snapshots and not result_page_handled):
                 home_detected = True
 
@@ -1305,7 +1422,7 @@ def main(
                 quote_ready_detected = training_controls_detected and chart_loaded_detected
                 ocr_performed = True
 
-            elif not training_page_detected and not home_detected:
+            elif not training_page_detected and not home_detected and not result_detected:
                 focused_items: list[object] = []
                 if has_snapshots:
                     result_region_cfg = config.get("capture", {}).get(
@@ -1343,12 +1460,49 @@ def main(
                 last_ocr_at = time.time()
 
         if result_detected and pending_result_image is None and not result_page_handled:
-            pending_result_image = (last_ocr_screenshot or screenshot).copy()
-            pending_result_items = list(last_ocr_items)
-            pending_result_text = last_text
-            result_ready_since = now
-            result_delay = max(1.0, float(config.get("session", {}).get("result_ready_delay_seconds", 1.0)))
-            report_status("result", "已识别结果页", f"等待 {result_delay:.1f} 秒读取完整结果")
+            if not result_visual_ready_detected:
+                result_ready_since = None
+                result_previous_frame = None
+                result_stable_since = None
+                report_status("result", "已识别结果页", "等待最终结果画面")
+                time.sleep(poll_seconds)
+                continue
+
+            if result_ready_since is None:
+                result_ready_since = now
+                result_previous_frame = screenshot.copy()
+                result_stable_since = None
+                report_status("result", "最终结果已出现", "正在确认画面稳定")
+                time.sleep(poll_seconds)
+                continue
+
+            stable_seconds = float(config.get("session", {}).get("result_capture_stable_seconds", 0.12))
+            max_wait_seconds = float(config.get("session", {}).get("result_capture_max_wait_seconds", 0.8))
+            max_change_ratio = float(config.get("session", {}).get("result_capture_max_change_ratio", 0.03))
+            result_change = (
+                image_pixel_change_ratio(result_previous_frame, screenshot)
+                if result_previous_frame is not None
+                else 100.0
+            )
+            result_previous_frame = screenshot.copy()
+            if result_change <= max_change_ratio:
+                if result_stable_since is None:
+                    result_stable_since = now
+            else:
+                result_stable_since = None
+
+            stable_ready = result_stable_since is not None and now - result_stable_since >= stable_seconds
+            timeout_ready = now - result_ready_since >= max_wait_seconds
+            if not stable_ready and not timeout_ready:
+                time.sleep(poll_seconds)
+                continue
+
+            pending_result_image = screenshot.copy()
+            pending_result_items = []
+            pending_result_text = ""
+            result_previous_frame = None
+            result_stable_since = None
+            report_status("result", "已锁定最终结果", "正在读取结果卡")
 
         result_detected = pending_result_image is not None or result_detected
         home_detected = home_detected and not result_detected
@@ -1362,6 +1516,8 @@ def main(
                 start_chart_previous = None
                 start_chart_stable_since = None
                 result_ready_since = None
+                result_previous_frame = None
+                result_stable_since = None
                 result_page_handled = False
                 recovery_start_frame = None
                 recovery_latest_frame = None
@@ -1378,19 +1534,12 @@ def main(
 
         if not result_detected:
             result_ready_since = None
+            result_previous_frame = None
+            result_stable_since = None
             result_page_handled = False
 
         if result_detected:
             if result_page_handled:
-                time.sleep(poll_seconds)
-                continue
-            result_delay = max(1.0, float(config.get("session", {}).get("result_ready_delay_seconds", 1.0)))
-            if result_ready_since is None:
-                result_ready_since = now
-                report_status("result", "已识别结果页", f"等待 {result_delay:.1f} 秒读取完整结果")
-                time.sleep(poll_seconds)
-                continue
-            if now - result_ready_since < result_delay:
                 time.sleep(poll_seconds)
                 continue
             result_page_handled = True
@@ -1410,17 +1559,15 @@ def main(
                 ) or config.get("capture", {}).get(
                     "result_scan_region"
                 ) or DEFAULT_FOCUSED_OCR_REGIONS["result_scan_region"]
-                result_region = rect_from_config_scaled(result_region_cfg, screenshot, config)
+                result_region = rect_from_config_scaled(result_region_cfg, result_image, config)
                 current_result_items = ocr.read_region_items(
-                    screenshot,
+                    result_image,
                     result_region,
                     float(config.get("ocr", {}).get("result_anchor_scale", 1.5)),
                 )
                 current_result_text = ocr.text_from_items(current_result_items)
-                if is_result_page(current_result_text, result_anchor):
-                    result_image = screenshot.copy()
-                    result_items = current_result_items
-                    result_text = current_result_text
+                result_items = current_result_items
+                result_text = current_result_text
 
                 profit_cfg = config.get("capture", {}).get("result_profit_region")
                 profit_items: list[object] = []
@@ -1431,11 +1578,6 @@ def main(
                 if re.search(r"[+-]?\d+(?:\.\d+)?%", profit_text):
                     result_items = [*profit_items, *result_items]
                     result_text = ocr.text_from_items(result_items)
-                else:
-                    full_result_items = ocr.read_items(result_image)
-                    if full_result_items:
-                        result_items = [*full_result_items, *result_items]
-                        result_text = ocr.text_from_items(result_items)
                 detail = "30/30 曾漏检，正在使用暂存盘面补录" if recovered else "识别到股票区间涨幅"
                 report_status("result", "已锁定结果页", detail)
                 print("[DONE] Result page detected. Writing review image...")
@@ -1447,20 +1589,25 @@ def main(
                     selected_tags = []
                 frames = [start_frame, latest_frame]
                 stitched = stitch_frames(frames, config)
-                note_path = write_obsidian_note(
-                    obsidian_dir,
-                    image_subdir,
-                    stitched,
-                    result_image,
-                    metadata,
-                    config,
-                    result_items,
-                    selected_tags,
-                )
-                if bool(config["stitching"]["save_raw_frames"]):
-                    save_raw_frames(obsidian_dir, raw_frame_subdir, frames)
-                print(f"[DONE] Wrote: {note_path}")
-                report_status("saved", "总结已保存", str(note_path))
+                duplicate_note = find_duplicate_note(obsidian_dir, stitched, metadata)
+                if duplicate_note is not None:
+                    print(f"[SKIP] Duplicate chart already saved: {duplicate_note}")
+                    report_status("saved", "重复总结已忽略", str(duplicate_note))
+                else:
+                    note_path = write_obsidian_note(
+                        obsidian_dir,
+                        image_subdir,
+                        stitched,
+                        result_image,
+                        metadata,
+                        config,
+                        result_items,
+                        selected_tags,
+                    )
+                    if bool(config["stitching"]["save_raw_frames"]):
+                        save_raw_frames(obsidian_dir, raw_frame_subdir, frames)
+                    print(f"[DONE] Wrote: {note_path}")
+                    report_status("saved", "总结已保存", str(note_path))
                 start_frame = None
                 latest_frame = None
                 last_latest_change_crop = None
@@ -1468,6 +1615,8 @@ def main(
                 start_chart_previous = None
                 start_chart_stable_since = None
                 result_ready_since = None
+                result_previous_frame = None
+                result_stable_since = None
                 recovery_start_frame = None
                 recovery_latest_frame = None
                 recovery_change_crop = None
@@ -1487,6 +1636,9 @@ def main(
                 pending_result_image = None
                 pending_result_items = []
                 pending_result_text = ""
+                result_ready_since = None
+                result_previous_frame = None
+                result_stable_since = None
             time.sleep(poll_seconds)
             continue
 

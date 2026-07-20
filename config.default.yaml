@@ -62,9 +62,14 @@ capture:
     bottom: 980
   result_profit_region:
     left: 190
-    top: 430
+    top: 350
     right: 466
     bottom: 530
+  result_final_controls_region:
+    left: 60
+    top: 430
+    right: 596
+    bottom: 700
   result_crop_region:
     left: 32
     top: 730
@@ -74,6 +79,7 @@ capture:
   training_blue_pixels: 1200
   training_center_ring_pixels: 80
   home_orange_pixels: 80000
+  result_final_blue_pixels: 20000
 
 session:
   require_start_30_30: true
@@ -87,7 +93,9 @@ session:
   start_capture_stable_seconds: 0.18
   start_capture_max_wait_seconds: 1.5
   start_capture_max_change_ratio: 0.02
-  result_ready_delay_seconds: 1.0
+  result_capture_stable_seconds: 0.12
+  result_capture_max_wait_seconds: 0.8
+  result_capture_max_change_ratio: 0.03
   loaded_total_color_pixels: 5000
   loaded_left_color_pixels: 1200
   loaded_main_top_px: 55
