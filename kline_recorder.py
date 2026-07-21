@@ -1251,6 +1251,7 @@ def main(
     status_callback: StatusCallback | None = None,
     stop_event: object | None = None,
     tag_provider: TagProvider | None = None,
+    manual_start_event: object | None = None,
 ) -> int:
     enable_dpi_awareness()
     config = load_config()
@@ -1650,6 +1651,30 @@ def main(
         change_rect = rect_from_config_scaled(config["capture"]["change_region"], screenshot, config)
         viewport = crop_relative(screenshot, stitch_rect)
         change_crop = crop_relative(screenshot, change_rect)
+
+        manual_start_requested = (
+            manual_start_event is not None
+            and getattr(manual_start_event, "is_set", lambda: False)()
+        )
+        if manual_start_requested:
+            getattr(manual_start_event, "clear", lambda: None)()
+            if start_frame is None:
+                start_frame = viewport.copy()
+                latest_frame = viewport.copy()
+                last_latest_change_crop = change_crop.copy()
+                recovery_start_frame = None
+                recovery_latest_frame = None
+                recovery_change_crop = None
+                quote_ready_since = None
+                start_chart_previous = None
+                start_chart_stable_since = None
+                session_start_detected = True
+                quote_ready_detected = True
+                print(f"[START] Manually captured initial snapshot. Window={screenshot.width}x{screenshot.height}")
+                report_status("captured", "已手动截取开始盘面", "正在记录本局训练")
+                time.sleep(poll_seconds)
+                continue
+            report_status("captured", "本局已经开始记录", "无需重复截取开始盘面")
 
         if start_frame is None:
             if not session_start_detected:

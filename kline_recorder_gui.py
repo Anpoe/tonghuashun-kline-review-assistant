@@ -34,7 +34,7 @@ from kline_dashboard import DashboardServer
 
 
 PANEL_WIDTH = 318
-PANEL_HEIGHT = 334
+PANEL_HEIGHT = 374
 PANEL_GAP = 10
 TAG_COLORS = ("#ef4444", "#f97316", "#eab308", "#22c55e", "#06b6d4", "#3b82f6", "#8b5cf6", "#ec4899")
 
@@ -102,6 +102,7 @@ class RecorderPanel:
         self.obsidian_dir = Path(self.config["paths"]["obsidian_dir"])
         self.events: queue.Queue[tuple[str, str, str]] = queue.Queue()
         self.stop_event = threading.Event()
+        self.manual_start_event = threading.Event()
         self.history: list[str] = []
         self.collapsed = False
         self.panel_topmost = False
@@ -233,6 +234,22 @@ class RecorderPanel:
         )
         self.detail_label.pack(fill="x", pady=(2, 0))
 
+        self.manual_start_button = tk.Button(
+            self.body,
+            text="手动截取开始盘面",
+            command=self.request_manual_start,
+            bg=COLORS["accent"],
+            fg="#ffffff",
+            activebackground="#e8640c",
+            activeforeground="#ffffff",
+            disabledforeground="#7f8794",
+            bd=0,
+            pady=6,
+            font=("Microsoft YaHei UI", 8, "bold"),
+            cursor="hand2",
+        )
+        self.manual_start_button.pack(fill="x", padx=12, pady=(0, 8))
+
         tk.Label(
             self.body,
             text="最近进度",
@@ -329,6 +346,25 @@ class RecorderPanel:
                 elif state == "home" and self.session_active:
                     self.session_active = False
                     self._clear_selected_tags()
+                if state == "captured":
+                    self.manual_start_button.configure(
+                        text="本局正在记录",
+                        state="disabled",
+                        cursor="arrow",
+                    )
+                elif state in {"result", "saving"}:
+                    self.manual_start_button.configure(
+                        text="正在处理本局结果",
+                        state="disabled",
+                        cursor="arrow",
+                    )
+                elif state in {"saved", "home", "waiting", "connected", "error"}:
+                    self.manual_start_event.clear()
+                    self.manual_start_button.configure(
+                        text="手动截取开始盘面",
+                        state="normal",
+                        cursor="hand2",
+                    )
                 self.status_label.configure(text=message)
                 self.detail_label.configure(text=detail or " ")
                 color = COLORS.get(state, COLORS["connected"])
@@ -349,9 +385,25 @@ class RecorderPanel:
 
     def _run_recorder(self) -> None:
         try:
-            run_recorder(self.post_status, self.stop_event, self.get_selected_tags)
+            run_recorder(
+                self.post_status,
+                self.stop_event,
+                self.get_selected_tags,
+                self.manual_start_event,
+            )
         except Exception as exc:
             self.post_status("error", "录制服务发生错误", str(exc))
+
+    def request_manual_start(self) -> None:
+        if self.manual_start_event.is_set():
+            return
+        self.manual_start_event.set()
+        self.manual_start_button.configure(
+            text="正在截取当前盘面…",
+            state="disabled",
+            cursor="arrow",
+        )
+        self.post_status("loading", "已请求手动开始", "正在截取当前训练盘面")
 
     def get_selected_tags(self) -> list[dict[str, str]]:
         with self.tag_lock:
