@@ -22,10 +22,12 @@ try:
     import win32api
     import win32con
     import win32gui
+    import win32ui
 except ImportError:
     win32api = None
     win32con = None
     win32gui = None
+    win32ui = None
 
 
 APP_DIR = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent
@@ -289,8 +291,84 @@ def print_window_diagnostics(filter_text: str | Iterable[str] = "") -> None:
         )
 
 
+def image_has_visible_content(image: Image.Image) -> bool:
+    gray = np.asarray(image.convert("L"), dtype=np.uint8)
+    if gray.size == 0:
+        return False
+    return float(gray.std()) >= 2.0 and float(np.count_nonzero(gray >= 8)) / gray.size >= 0.01
+
+
+def capture_window_direct(hwnd: int, rect: Rect) -> Image.Image | None:
+    if win32gui is None or win32ui is None or rect.width <= 0 or rect.height <= 0:
+        return None
+
+    window_dc_handle = 0
+    source_dc = None
+    memory_dc = None
+    bitmap = None
+    try:
+        window_dc_handle = win32gui.GetWindowDC(hwnd)
+        if not window_dc_handle:
+            return None
+        source_dc = win32ui.CreateDCFromHandle(window_dc_handle)
+        memory_dc = source_dc.CreateCompatibleDC()
+        bitmap = win32ui.CreateBitmap()
+        bitmap.CreateCompatibleBitmap(source_dc, rect.width, rect.height)
+        memory_dc.SelectObject(bitmap)
+
+        rendered = ctypes.windll.user32.PrintWindow(hwnd, memory_dc.GetSafeHdc(), 2)
+        if not rendered:
+            rendered = ctypes.windll.user32.PrintWindow(hwnd, memory_dc.GetSafeHdc(), 0)
+
+        bitmap_info = bitmap.GetInfo()
+        bitmap_bits = bitmap.GetBitmapBits(True)
+        image = Image.frombuffer(
+            "RGB",
+            (bitmap_info["bmWidth"], bitmap_info["bmHeight"]),
+            bitmap_bits,
+            "raw",
+            "BGRX",
+            0,
+            1,
+        ).copy()
+        if not rendered or not image_has_visible_content(image):
+            return None
+        return image
+    except Exception:
+        return None
+    finally:
+        if bitmap is not None:
+            try:
+                win32gui.DeleteObject(bitmap.GetHandle())
+            except Exception:
+                pass
+        if memory_dc is not None:
+            try:
+                memory_dc.DeleteDC()
+            except Exception:
+                pass
+        if source_dc is not None:
+            try:
+                source_dc.DeleteDC()
+            except Exception:
+                pass
+        if window_dc_handle:
+            try:
+                win32gui.ReleaseDC(hwnd, window_dc_handle)
+            except Exception:
+                pass
+
+
 def capture_window(hwnd: int, rect: Rect, window_config: dict | None = None) -> Image.Image:
     window_config = window_config or {}
+    if bool(window_config.get("direct_window_capture", True)):
+        direct = capture_window_direct(hwnd, rect)
+        if direct is not None:
+            _BLUE_BORDER_CAPTURE_CACHE.pop(hwnd, None)
+            return direct
+        if not bool(window_config.get("allow_screen_capture_fallback", False)):
+            raise RuntimeError("训练营窗口暂时无法直接读取；已停止屏幕回退以避免捕捉其他窗口")
+
     if bool(window_config.get("locate_by_blue_border", False)):
         now = time.monotonic()
         refresh_seconds = max(0.1, float(window_config.get("blue_border_refresh_seconds", 0.5)))
@@ -1354,7 +1432,12 @@ def main(
                     f"size={window_rect.width}x{window_rect.height}"
                 )
                 last_window_log_at = now
-        screenshot = capture_window(hwnd, window_rect, config["window"])
+        try:
+            screenshot = capture_window(hwnd, window_rect, config["window"])
+        except RuntimeError as exc:
+            report_status("error", "暂时无法读取训练营窗口", str(exc))
+            time.sleep(poll_seconds)
+            continue
         now = time.time()
         training_page_detected = is_training_page(screenshot, config)
         visual_home_detected = not training_page_detected and is_home_page_visual(screenshot, config)

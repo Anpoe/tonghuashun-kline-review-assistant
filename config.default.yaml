@@ -9,6 +9,8 @@ window:
   min_height: 560
   preferred_width: 656
   preferred_height: 1348
+  direct_window_capture: true
+  allow_screen_capture_fallback: false
   locate_by_blue_border: true
   blue_border_refresh_seconds: 0.5
   missing_window_poll_seconds: 0.2

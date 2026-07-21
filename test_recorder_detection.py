@@ -237,14 +237,46 @@ class RecorderDetectionTests(unittest.TestCase):
                 patch("kline_recorder.ImageGrab.grab", return_value=cached_image) as grab,
                 patch("kline_recorder.time.monotonic", side_effect=(10.0, 10.1)),
             ):
-                first = capture_window(hwnd, window_rect, {"locate_by_blue_border": True})
-                second = capture_window(hwnd, window_rect, {"locate_by_blue_border": True})
+                first = capture_window(
+                    hwnd,
+                    window_rect,
+                    {"direct_window_capture": False, "locate_by_blue_border": True},
+                )
+                second = capture_window(
+                    hwnd,
+                    window_rect,
+                    {"direct_window_capture": False, "locate_by_blue_border": True},
+                )
             self.assertEqual(first.getpixel((0, 0)), (0, 0, 128))
             self.assertEqual(second.getpixel((0, 0)), (0, 0, 0))
             self.assertEqual(locate.call_count, 1)
             self.assertEqual(grab.call_count, 1)
         finally:
             _BLUE_BORDER_CAPTURE_CACHE.pop(hwnd, None)
+
+    def test_direct_window_capture_never_uses_covering_desktop_pixels(self) -> None:
+        hwnd = 123456
+        window_rect = Rect(100, 100, 756, 1448)
+        training_image = Image.new("RGB", (656, 1348), "navy")
+        game_image = Image.new("RGB", (656, 1348), "red")
+        with (
+            patch("kline_recorder.capture_window_direct", return_value=training_image),
+            patch("kline_recorder.ImageGrab.grab", return_value=game_image) as desktop_grab,
+        ):
+            captured = capture_window(hwnd, window_rect, {"direct_window_capture": True})
+        self.assertEqual(captured.getpixel((0, 0)), (0, 0, 128))
+        desktop_grab.assert_not_called()
+
+    def test_direct_window_capture_failure_does_not_fall_back_to_desktop(self) -> None:
+        hwnd = 123456
+        window_rect = Rect(100, 100, 756, 1448)
+        with (
+            patch("kline_recorder.capture_window_direct", return_value=None),
+            patch("kline_recorder.ImageGrab.grab") as desktop_grab,
+        ):
+            with self.assertRaises(RuntimeError):
+                capture_window(hwnd, window_rect, {"direct_window_capture": True})
+        desktop_grab.assert_not_called()
 
     def test_writes_normalized_tags_to_markdown(self) -> None:
         tags = normalize_tags(
